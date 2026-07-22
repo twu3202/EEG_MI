@@ -1,0 +1,12 @@
+# CPU-only stack for classic MI baselines (pyRiemann / MOABB / MNE).
+# Runs fine on the M5 Mac — no GPU needed.
+numpy<2.0
+scipy
+scikit-learn
+pandas
+matplotlib
+seaborn
+mne>=1.6
+moabb>=1.1
+pyriemann>=0.6
+h5py

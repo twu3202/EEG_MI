@@ -1,0 +1,22 @@
+# large / external / regenerable (kept out of the repo)
+# third_party = cloned FM repos (EEGPT, CBraMod, LaBraM, Cerelog, OpenBCI fork)
+# mne_data = public MOABB/MNE datasets (auto-downloaded); checkpoints = model weights
+# fromprovider = vendor's proprietary software + manuals (not ours to redistribute)
+third_party/
+mne_data/
+checkpoints/
+fromprovider/
+*.pth
+*.ckpt
+
+# recordings / data (personal EEG; synth is regenerable by the analysis tools)
+recordings/
+*.npz
+*.fif
+*.xdf
+
+# python / os cruft
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

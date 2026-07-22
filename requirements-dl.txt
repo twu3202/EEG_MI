@@ -1,0 +1,10 @@
+# Deep-learning stack. On the M5 Mac, torch uses the Apple GPU via the MPS backend
+# (device="mps"). Good enough for frozen-backbone linear probing / fine-tuning of
+# ~10M-param EEG foundation models (EEGPT, CBraMod). Heavy pretraining -> use the server.
+torch>=2.2
+braindecode>=0.8
+einops
+timm
+transformers
+huggingface_hub
+tensorboard

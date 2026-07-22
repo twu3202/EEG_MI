@@ -1,0 +1,10 @@
+# Core — required for the acquisition GUI, filter, probe, and impedance UI
+numpy<2.0
+scipy
+pyqtgraph
+PyQt6
+
+# Optional (everything core works without these):
+#   mne    — only to also save recordings as .fif (Record still saves .npz without it)
+#   pylsl  — only for the LSL-bridge path (running udp_lsl_bridge.py as an LSL source)
+# pip install mne pylsl
