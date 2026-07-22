@@ -1,3 +1,4 @@
+# PORTABLE COPY — synced from src/ (edit src/, then re-run sync). Flat-folder imports.
 #!/usr/bin/env python
 """Impedance probe — try the board's (undocumented) impedance mode.
 
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from montage import CAP32_CHANNELS as CH  # noqa: E402
 from udp_lsl_bridge import UdpSource, parse_packet, IMPEDANCE_MODE, EEG_MODE, RATE_CMD, START  # noqa: E402

@@ -38,7 +38,8 @@ WIN_S = 2.0
 # (the board drives the body and each electrode measures pickup). So higher = better.
 AMP_GOOD, AMP_OK = 2500.0, 1200.0         # µV @31.2Hz: >good green, >ok amber, else red
 INJ_MIN = 50.0                            # median amp above this => board is injecting
-RAIL_UV = 0.80 * (2 ** 23) * ADC_MICROVOLTS_PER_COUNT   # ≈150 mV: near the ADS1299 rail
+FULLSCALE_UV = (2 ** 23) * ADC_MICROVOLTS_PER_COUNT     # ≈187.5 mV: the ADS1299 ±full-scale
+RAIL_UV = 0.80 * FULLSCALE_UV                            # (kept for the demo waveform)
 EMA = 0.8                                  # heavy smoothing — reading is noisy (CV≈2)
 
 
@@ -103,7 +104,13 @@ class Reader(threading.Thread):
 def measure(ring, fs):
     b = ring.snapshot()                                   # (32, W) µV
     amp = np.empty(NCH)
-    railed = np.max(np.abs(b), axis=1) > RAIL_UV          # saturated -> invalid
+    # RAIL = amplifier actually SATURATED/clipping: a real fraction of samples pinned near
+    # ±full-scale. A large DC OFFSET alone (very common on dry electrodes) is NOT a rail — the
+    # old `max(|b|) > 0.8·FS` test false-flagged good electrodes (e.g. F7) whose 31.2 Hz
+    # injection was fine but that sat on a big DC baseline. The 31.2 Hz amplitude itself is
+    # DC-independent (it's an FFT bin), so those channels read fine once we stop mislabelling them.
+    sat_frac = (np.abs(b) > 0.97 * FULLSCALE_UV).mean(axis=1)
+    railed = sat_frac > 0.02                               # >2% of samples clipped -> real rail
     for c in range(NCH):
         amp[c] = impedance(b[c], fs)[1]
     valid = amp[~railed]
@@ -120,13 +127,13 @@ def build(fs):
     root = QtWidgets.QWidget(); root.resize(760, 820)
     root.setStyleSheet("background:#0e1116;color:#c8ced8;font-family:'Helvetica Neue',Helvetica,Arial;")
     v = QtWidgets.QVBoxLayout(root); v.setContentsMargins(10, 8, 10, 8)
-    title = QtWidgets.QLabel("Electrode CONTACT strength  ·  press to improve (higher % = better; "
-                             "signal pickup, NOT a calibrated impedance)")
+    title = QtWidgets.QLabel("Electrode CONTACT  ·  31.2Hz pickup amplitude µV  "
+                             "(higher = better contact; NOT a calibrated impedance)  ·  press to improve")
     title.setStyleSheet("font-size:16px;font-weight:600;color:#e8edf4;"); v.addWidget(title)
     stat = QtWidgets.QLabel("connecting…"); stat.setStyleSheet("color:#8b95a5;font-size:12px;"); v.addWidget(stat)
 
     plot = pg.PlotWidget(); plot.setMenuEnabled(False); plot.hideAxis("left"); plot.hideAxis("bottom")
-    plot.setAspectLocked(True); plot.setXRange(-1.4, 1.4); plot.setYRange(-1.4, 1.5)
+    plot.setAspectLocked(True); plot.setXRange(-1.6, 1.6); plot.setYRange(-1.4, 1.5)
     v.addWidget(plot, 1)
     th = np.linspace(0, 2 * np.pi, 120)
     plot.plot(np.cos(th) * 1.18, np.sin(th) * 1.18, pen=pg.mkPen("#3a4150", width=2))
@@ -163,14 +170,15 @@ def refresh(ctx, ring, reader):
     for i in range(NCH):
         col = acolor(a[i], railed[i], injected)
         spots.append({"pos": ctx["xy"][i], "brush": pg.mkBrush(col)})
-        pct = int(np.clip((a[i] - 1000.0) / 3000.0, 0, 1) * 100)   # ~contact strength %
-        ctx["labels"][i].setText("RAIL" if railed[i] else (f"{pct}%" if injected else "?"))
+        # show the raw 31.2 Hz pickup AMPLITUDE (µV); colour still encodes state (incl. RAIL).
+        txt = f"{a[i]:.0f}" if (injected or railed[i]) else "?"
+        ctx["labels"][i].setText(txt)
         ctx["labels"][i].setColor(col)
     ctx["scatter"].setData(spots)
     if injected:
         ng = int(((a > AMP_GOOD) & ~railed).sum()); nr = int(railed.sum())
-        ctx["stat"].setText(f"✅ 注入正常 · {ng}/{NCH} 接触好(绿) · {nr} railed · "
-                            f"% = 接触强度(注入拾取量),越高越好,不是真实阻抗 · 压一压会升高")
+        ctx["stat"].setText(f"✅ 注入正常 · {ng}/{NCH} 接触好(绿) · {nr} railed(饱和) · "
+                            f"数字 = 31.2Hz 拾取幅度 µV(越高=接触越好,非标定阻抗)· 压一压会升高")
     else:
         ctx["stat"].setText(f"⚠ 未检测到 31.2Hz 注入 (median {np.median(amp[~railed]) if (~railed).any() else 0:.0f} µV)"
                             " — 没连上/没在阻抗模式,或全部 railed")
@@ -201,7 +209,7 @@ def _fill_demo(ring, fs):
         for c in range(NCH):
             v1 = 5500 - r[c] * 4200 + rng.normal(0, 300)   # center high(good) -> edge low(poor)
             chunk[c] = v1 * np.sin(2 * np.pi * F0 * t) + rng.normal(0, 40, N)
-        chunk[14] = RAIL_UV * 1.2 * np.sign(np.sin(2 * np.pi * 3 * t))   # T7 = railed demo
+        chunk[14] = FULLSCALE_UV * 0.995 * np.sign(np.sin(2 * np.pi * 3 * t))   # T7 = clipped/railed demo
         ring.append(chunk)
 
 

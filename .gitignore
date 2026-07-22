@@ -20,3 +20,6 @@ __pycache__/
 *.pyc
 .venv/
 .DS_Store
+
+# stale archives (the folders themselves are versioned)
+*.zip

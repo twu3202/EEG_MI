@@ -1,3 +1,4 @@
+# PORTABLE COPY — synced from src/ (edit src/, then re-run sync). Flat-folder imports.
 #!/usr/bin/env python
 """Socket-level probe — debug 'no data' before touching the GUI.
 
@@ -16,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from montage import ADC_MICROVOLTS_PER_COUNT  # noqa: E402
 
 RATE = {250: b"1", 500: b"2", 1000: b"3"}

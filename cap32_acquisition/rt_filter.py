@@ -1,3 +1,4 @@
+# PORTABLE COPY — synced from src/ (edit src/, then re-run sync). Flat-folder imports.
 """Real-time streaming EEG filter — mirrors the vendor app's RealTimeEEGFilter.
 
 Butterworth band-pass/low-pass (order 4) + optional 50 Hz iir-notch, applied with

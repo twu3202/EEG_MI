@@ -1,3 +1,4 @@
+# PORTABLE COPY — synced from src/ (edit src/, then re-run sync). Flat-folder imports.
 """Synthetic 32-ch EEG source — lets us test the viewer and pipeline with no hardware.
 
 Produces plausible-looking µV data: posterior alpha (~10 Hz), central mu, pink-ish

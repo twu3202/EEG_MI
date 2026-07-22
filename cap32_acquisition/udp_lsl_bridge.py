@@ -1,3 +1,4 @@
+# PORTABLE COPY — synced from src/ (edit src/, then re-run sync). Flat-folder imports.
 #!/usr/bin/env python
 """WiFi -> LSL bridge for the 32-ch ADS1299 cap (backup acquisition path).
 
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 import numpy as np
 
 # --- montage / scaling from our project ---
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
 from montage import CAP32_CHANNELS, ADC_MICROVOLTS_PER_COUNT  # noqa: E402
 
 
