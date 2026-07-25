@@ -101,9 +101,10 @@ class LossAccount:
 
 # ----------------------------------------------------------------- live capture
 def run_live(host, port, fs, seconds, window, settle=3.0):
-    from udp_lsl_bridge import UdpSource, parse_packet, board_init
+    from udp_lsl_bridge import UdpSource, parse_packet, board_init, drain
     src = UdpSource(host, port)
     board_init(src, fs); time.sleep(0.4)
+    drain(src)                      # discard the board_init transient
     src.sock.settimeout(2.0)
     acc = LossAccount(window, settle)
     print(f"measuring UDP loss for {seconds:.0f}s @ nominal {fs} Hz …  (Ctrl-C to stop early)\n")

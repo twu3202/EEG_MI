@@ -118,6 +118,37 @@ def board_init(src, sfreq: float) -> None:
     time.sleep(0.1)
 
 
+def drain(src, seconds: float = 0.4) -> int:
+    """Discard whatever is already sitting in the socket buffer, then let the caller start
+    counting from a clean slate.
+
+    `board_init` sends b -> rate -> '*' with sleeps in between and the board RESTARTS its
+    stream on each mode switch, so the frames buffered across that transition carry a
+    discontinuous sequence counter. Reading them makes the very first second look like a
+    ~200-frame burst of "loss" that says nothing about link quality (measured on the real
+    cap: 200 lost in second 1, then 0 for the next 119 s). Call this once after board_init
+    and reset your `last_seq` to None."""
+    import time as _t
+    n = 0
+    old = src.sock.gettimeout()
+    src.sock.settimeout(0.05)
+    end = _t.time() + seconds
+    try:
+        while _t.time() < end:
+            try:
+                src.sock.recv(65536)
+                n += 1
+            except OSError:
+                break
+    finally:
+        src.sock.settimeout(old)
+        try:
+            src.buf.clear()          # drop any half-assembled frame too
+        except AttributeError:
+            pass
+    return n
+
+
 # --------------------------------------------------------------------------- IO
 def _reframe(read, buf: bytearray, layout: PacketLayout):
     """Pull complete `0xA0 … 0xC0` frames out of a growing byte stream.

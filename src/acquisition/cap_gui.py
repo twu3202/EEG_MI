@@ -104,6 +104,7 @@ class Receiver(threading.Thread):
         self._last_sample = None
         self.filled = 0                  # samples reconstructed to cover dropped frames
         self.car = True                  # live toggle: common average reference
+        self.bad = np.zeros(n_ch, bool)  # dead/railed channels — excluded from CAR
         self.deblink = None              # live toggle: a calibrated LiveDeblink operator or None
         self.calib = Ring(n_ch, int(30 * fs))   # rolling buffer for ICA calibration
 
@@ -164,7 +165,14 @@ class Receiver(threading.Thread):
         # Common Average Reference (robust, median) — removes common-mode / floating-REF
         # drift shared across channels (the vendor GUI does this before filtering). Toggleable
         # so you can see the untouched (floating-reference) data.
-        base = raw_chunk - np.median(raw_chunk, axis=0, keepdims=True) if self.car else raw_chunk
+        if self.car:
+            # Median (not mean) so one rogue channel can't shift the reference, AND skip
+            # channels already known to be dead/railed: an electrode pinned at +full scale
+            # would otherwise drag the reference by ~fullscale/n_ch on EVERY channel.
+            good = raw_chunk[~self.bad] if (~self.bad).any() else raw_chunk
+            base = raw_chunk - np.median(good, axis=0, keepdims=True)
+        else:
+            base = raw_chunk
         self.calib.append(base.astype(np.float32))            # pre-deblink, for ICA calibration
         if self.deblink is not None:                          # live ICA eye-artifact removal
             base = self.deblink.apply(base).astype(np.float32)
@@ -191,11 +199,12 @@ class Receiver(threading.Thread):
                     time.sleep(step / self.fs)
                 return
             # hardware: udp/tcp via the shared parser
-            from udp_lsl_bridge import UdpSource, TcpSource, parse_packet, board_init
+            from udp_lsl_bridge import UdpSource, TcpSource, parse_packet, board_init, drain
             self.report(f"connecting {self.kind}://{self.host}:{self.port} …")
             self.src = (UdpSource(self.host, self.port) if self.kind == "udp"
                         else TcpSource(self.host, self.port))
             board_init(self.src, self.fs)   # 'b' start -> rate -> '*' EEG mode (leaves impedance)
+            drain(self.src)                 # drop the mode-switch transient before counting loss
             self.report("connected · sent init (b / rate / *) · waiting for frames …")
             for pkt in self.src.frames():
                 if not self.running:
@@ -560,12 +569,18 @@ def refresh_scope(ctx):
         c.setData(ctx["tvec"], np.clip(y / clip, -1.0, 1.0) * half + ctx["baselines"][i])
 
 
-def refresh_quality(ctx):
+def refresh_quality(ctx, recv=None):
     b = ctx["raw"].snapshot()
+    dead = np.zeros(len(ctx["cells"]), bool)
     for i, (dot, val) in enumerate(ctx["cells"]):
         s, rms = quality(b[i], ctx["fs"])
+        flat = rms < 0.5                      # constant channel = disconnected / powered down
+        dead[i] = flat
         dot.setStyleSheet(f"color:{_COL[s]};font-size:13px;")
-        val.setText(f"{rms:5.1f} µV"); val.setStyleSheet(f"color:{_COL[s]};font-size:11px;")
+        val.setText("DEAD" if flat else f"{rms:5.1f} µV")
+        val.setStyleSheet(f"color:{_COL[s]};font-size:11px;")
+    if recv is not None:
+        recv.bad = dead                       # keep CAR / head-map free of dead channels
 
 
 def refresh_fft(ctx):
@@ -670,7 +685,9 @@ def run_live(fs, source_kind, host, port):
             data, trig, marker, gap = out
             meta = dict(paradigm=dict(kind="free-run (no paradigm)"),
                         acquisition=dict(source=r.kind, sfreq=float(ctx["fs"]),
-                                         car=bool(r.car), channels=list(CAP32_CHANNELS)),
+                                         car=bool(r.car), channels=list(CAP32_CHANNELS),
+                                         dead_channels=[CAP32_CHANNELS[i]
+                                                        for i in np.where(r.bad)[0]]),
                         link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
                                   loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3)))
             base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS,
@@ -728,7 +745,9 @@ def run_live(fs, source_kind, host, port):
                                  deblink=r.deblink is not None,
                                  display_filter=dict(low=c["low"].text(), high=c["high"].text(),
                                                      notch50=c["notch"].isChecked()),
-                                 channels=list(CAP32_CHANNELS)),
+                                 channels=list(CAP32_CHANNELS),
+                                 dead_channels=[CAP32_CHANNELS[i]
+                                                for i in np.where(r.bad)[0]]),
                 link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
                           loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3),
                           samples_filled=int(r.filled)))
@@ -787,7 +806,7 @@ def run_live(fs, source_kind, host, port):
 
     ctx["root"].show()
     t1 = QtCore.QTimer(); t1.timeout.connect(lambda: refresh_scope(ctx)); t1.start(33)
-    t2 = QtCore.QTimer(); t2.timeout.connect(lambda: refresh_quality(ctx)); t2.start(500)
+    t2 = QtCore.QTimer(); t2.timeout.connect(lambda: refresh_quality(ctx, rec["thread"])); t2.start(500)
     t3 = QtCore.QTimer(); t3.timeout.connect(lambda: refresh_fft(ctx)); t3.start(300)
     QtCore.QTimer.singleShot(200, connect)   # auto-connect on launch (uses --source)
     app.exec()

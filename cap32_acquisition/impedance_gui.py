@@ -172,7 +172,9 @@ def refresh(ctx, ring, reader):
         col = acolor(a[i], railed[i], injected)
         spots.append({"pos": ctx["xy"][i], "brush": pg.mkBrush(col)})
         # show the raw 31.2 Hz pickup AMPLITUDE (µV); colour still encodes state (incl. RAIL).
-        txt = f"{a[i]:.0f}" if (injected or railed[i]) else "?"
+        # a railed channel's 31.2 Hz amplitude is 0 by construction (the signal is a
+        # CONSTANT at full scale) — printing that "0" hides the real fault, so say RAIL.
+        txt = "RAIL" if railed[i] else (f"{a[i]:.0f}" if injected else "?")
         ctx["labels"][i].setText(txt)
         ctx["labels"][i].setColor(col)
     ctx["scatter"].setData(spots)

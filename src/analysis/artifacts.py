@@ -98,11 +98,11 @@ def preprocess(raw, flags: CleanFlags, verbose=False):
         raw.notch_filter(flags.notch, verbose="ERROR")
     if flags.l_freq or flags.h_freq:
         raw.filter(flags.l_freq or None, flags.h_freq or None, verbose="ERROR")
-    if flags.interp:
-        bad = detect_bad_channels(raw)
-        raw.info["bads"] = bad
-        if bad and raw.get_montage() is not None:
-            raw.interpolate_bads(reset_bads=True, verbose="ERROR")
+    bad = detect_bad_channels(raw)          # always FLAG (so CAR/ICA exclude them) …
+    raw.info["bads"] = bad
+    report["bad"] = bad
+    if flags.interp and bad and raw.get_montage() is not None:
+        raw.interpolate_bads(reset_bads=True, verbose="ERROR")   # … interpolate only if asked
         report["interpolated"] = bad
     if flags.car:
         raw.set_eeg_reference("average", verbose="ERROR")
@@ -168,6 +168,10 @@ class LiveDeblink:
         info.set_montage(mne.channels.make_standard_montage("standard_1020"),
                          match_case=False, on_missing="ignore", verbose="ERROR")
         raw = mne.io.RawArray(buf_uv * 1e-6, info, verbose="ERROR")
+        # A dead/railed channel (e.g. an electrode pinned at +full scale) would otherwise
+        # poison the MEAN reference (~fullscale/n_ch on every channel) and make the data
+        # rank-deficient once ICA centres it. Exclude it from both.
+        raw.info["bads"] = detect_bad_channels(raw)
         raw.set_eeg_reference("average", verbose="ERROR")
         ica = fit_ica(raw)
         labels, probs, exclude = label_ica(ica, raw, method, prob=prob)
