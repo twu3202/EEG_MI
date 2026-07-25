@@ -54,9 +54,10 @@ class MiTask:
     glyph: str          # arrow / symbol shown next to the word
     cn: str             # the BIG word (what you actually read)
     en: str
-    kmi: str            # kinesthetic instruction (feel it)
+    kmi: str            # kinesthetic instruction (feel it)   — cognitive tasks: same text
     vmi: str            # visual instruction (see it)
     color: str
+    cat: str = "motor"  # motor | cognitive | rest
 
     @property
     def code(self) -> int:
@@ -83,9 +84,62 @@ MI_TASKS = {
         "tongue", "●", "舌头", "TONGUE",
         "持续想象【舌尖抵住上颚】的感觉 · 不要真的动",
         "在脑中看到自己的舌尖抵住上颚", "#805ad5"),
+    "hands": MiTask(
+        "hands", "↑", "双手", "BOTH hands",
+        "持续想象【双手】同时握拳发力的感觉 · 不要真的动",
+        "在脑中看到自己的【双手】同时反复握拳 · 不要真的动", "#0e7490"),
     "rest": MiTask(
         "rest", "+", "休息", "Rest",
-        "放松 · 看着十字 · 什么都不想", "放松 · 看着十字 · 什么都不想", "#6b7480"),
+        "放松 · 看着十字 · 什么都不想", "放松 · 看着十字 · 什么都不想", "#6b7480", "rest"),
+
+    # ---- cognitive / non-motor imagery -------------------------------------------
+    # These recruit frontal / temporal networks instead of needing fine C3-vs-C4
+    # resolution, so on a dry cap they often separate BETTER than two motor classes.
+    # Instructions deliberately warn against the confounds that would let a decoder
+    # "cheat" on EMG/EOG rather than brain activity.
+    "math": MiTask(
+        "math", "∑", "连减7", "Mental subtraction",
+        "从 300 开始连续减 7:300 → 293 → 286 …  ·  心里默算,不出声、不动嘴",
+        "从 300 开始连续减 7:300 → 293 → 286 …  ·  心里默算,不出声、不动嘴",
+        "#b45309", "cognitive"),
+    "words": MiTask(
+        "words", "✎", "想词", "Word association",
+        "默想以【花】开头的词,一个接一个  ·  不出声、不动嘴唇和下巴",
+        "默想以【花】开头的词,一个接一个  ·  不出声、不动嘴唇和下巴",
+        "#0891b2", "cognitive"),
+    "song": MiTask(
+        "song", "♪", "放歌", "Auditory imagery",
+        "在脑中播放一首熟悉的歌  ·  只在心里听,不哼唱、不打拍子",
+        "在脑中播放一首熟悉的歌  ·  只在心里听,不哼唱、不打拍子",
+        "#be185d", "cognitive"),
+    "navigate": MiTask(
+        "navigate", "⌂", "走房间", "Spatial navigation",
+        "在脑中从家门口走进去,依次走过每个房间  ·  眼睛别乱动",
+        "在脑中从家门口走进去,依次走过每个房间  ·  眼睛别乱动",
+        "#0d9488", "cognitive"),
+    "rotation": MiTask(
+        "rotation", "⟳", "旋转", "Mental rotation",
+        "在脑中让一个立方体绕轴慢慢旋转  ·  眼睛别乱动",
+        "在脑中让一个立方体绕轴慢慢旋转  ·  眼睛别乱动",
+        "#7c3aed", "cognitive"),
+    "face": MiTask(
+        "face", "☺", "想脸", "Familiar face",
+        "在脑中清晰地想起一张熟悉的脸,保持住这个画面  ·  眼睛别乱动",
+        "在脑中清晰地想起一张熟悉的脸,保持住这个画面  ·  眼睛别乱动",
+        "#e11d48", "cognitive"),
+}
+
+# ready-made task sets. Mixed motor+cognitive sets are usually the EASIEST to decode on a
+# dry cap — different networks beat fine left-vs-right spatial resolution.
+TASK_SETS = {
+    "L / R": ["left", "right"],
+    "L / R / Feet": ["left", "right", "feet"],
+    "L / R / Rest": ["left", "right", "rest"],
+    "L / R / 减7": ["left", "right", "math"],
+    "手 / 脚 / 减7 / 放歌": ["hands", "feet", "math", "song"],
+    "认知 4 类 (减7/想词/放歌/走房间)": ["math", "words", "song", "navigate"],
+    "筛选 8 类 (个性化选任务)": ["rest", "left", "right", "feet",
+                                 "math", "words", "song", "navigate"],
 }
 
 # background tint per phase — makes the current state unmistakable, even peripherally
@@ -267,6 +321,16 @@ def _paradigm_class():
                 self.count.setText("")
 
         # ------------------------------------------------------------ rendering
+        @staticmethod
+        def _fit(text, base):
+            """Shrink the big word when it's long, so 3–4 char tasks still fit on one line."""
+            n = len(text.replace(" ", ""))
+            return base if n <= 3 else int(base * (0.80 if n == 4 else 0.66 if n == 5 else 0.55))
+
+        def _big(self, t, base):
+            txt = t.cn if t.name == "rest" else f"{t.glyph} {t.cn}"
+            return txt, self._fit(txt, base)
+
         def _render(self):
             t = self._cur()
             ph = self._phase
@@ -281,17 +345,19 @@ def _paradigm_class():
                 self._set_phase_bar("#c3cad4")
 
             elif ph == "cue":
+                txt, size = self._big(t, 170)
                 self.kicker.setText("准 备")
-                self.word.setText(f"{t.glyph} {t.cn}" if t.name != "rest" else t.cn)
-                self.word.setStyleSheet(f"color:{t.color};font-size:170px;font-weight:700;"
+                self.word.setText(txt)
+                self.word.setStyleSheet(f"color:{t.color};font-size:{size}px;font-weight:700;"
                                         f"font-family:{FONT};")
                 self.instr.setText("马上开始 —— 先别动,等提示")
                 self._set_phase_bar("#e0a800")
 
             elif ph == "imagery":
-                self.kicker.setText("现 在 想 象" if t.name != "rest" else "现 在")
-                self.word.setText(f"{t.glyph} {t.cn}" if t.name != "rest" else t.cn)
-                self.word.setStyleSheet(f"color:{t.color};font-size:210px;font-weight:800;"
+                txt, size = self._big(t, 210)
+                self.kicker.setText("现 在 想 象" if t.cat != "rest" else "现 在")
+                self.word.setText(txt)
+                self.word.setStyleSheet(f"color:{t.color};font-size:{size}px;font-weight:800;"
                                         f"font-family:{FONT};")
                 self.instr.setText(t.instr(self.mode))
                 self._set_phase_bar("#2e9e5b")
@@ -406,7 +472,10 @@ def screenshot(seq, timing, out, mode, phase="imagery"):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tasks", nargs="+", default=["left", "right"], choices=list(MI_TASKS))
+    ap.add_argument("--tasks", nargs="+", default=["left", "right"], choices=list(MI_TASKS),
+                    help="任务名;认知类: math words song navigate rotation face")
+    ap.add_argument("--set", dest="task_set", default=None, choices=list(TASK_SETS),
+                    help="用预设任务组合(覆盖 --tasks)")
     ap.add_argument("--reps", type=int, default=15, help="trials per task (default 15)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--mode", default="kinesthetic", choices=["kinesthetic", "visual"],
@@ -421,9 +490,10 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print the trial order and exit")
     args = ap.parse_args()
 
-    seq = make_sequence(args.tasks, args.reps, args.seed)
+    tasks = TASK_SETS[args.task_set] if args.task_set else args.tasks
+    seq = make_sequence(tasks, args.reps, args.seed)
     timing = Timing(imagery=args.imagery, break_every=args.break_every, jitter=args.jitter)
-    print(f"{len(args.tasks)} tasks × {args.reps} = {len(seq)} trials, "
+    print(f"{len(tasks)} tasks {tasks} × {args.reps} = {len(seq)} trials, "
           f"~{timing.trial:.0f}s each → ~{len(seq)*timing.trial/60:.1f} min  ·  mode={args.mode}")
     if args.dry_run:
         print(seq); return

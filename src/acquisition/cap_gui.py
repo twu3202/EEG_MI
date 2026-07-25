@@ -342,9 +342,10 @@ def build(fs, source_kind, host, port, note=""):
     btn_conn = chip("● Connect", ACC)
     btn_rec = chip("● Record", "#eef1f5", TXT)
 
-    # MI paradigm controls
-    task_cb = field(QtWidgets.QComboBox(), 118)
-    task_cb.addItems(["L / R", "L / R / Feet", "L / R / Rest"])
+    # MI paradigm controls — task sets incl. cognitive tasks (减7 / 想词 / 放歌 / 走房间)
+    from mi_paradigm import TASK_SETS
+    task_cb = field(QtWidgets.QComboBox(), 240)
+    task_cb.addItems(list(TASK_SETS))
     reps_sp = field(QtWidgets.QSpinBox(), 54); reps_sp.setRange(2, 60); reps_sp.setValue(15)
     btn_task = chip("▶ MI Task", "#2f855a")
 
@@ -645,8 +646,7 @@ def run_live(fs, source_kind, host, port):
     ctx["ctrls"]["rec"].clicked.connect(toggle_rec)
 
     # ---- MI paradigm ----
-    _TASK_SETS = {"L / R": ["left", "right"], "L / R / Feet": ["left", "right", "feet"],
-                  "L / R / Rest": ["left", "right", "rest"]}
+    from mi_paradigm import TASK_SETS as _TASK_SETS
 
     def launch_task():
         r = rec["thread"]
