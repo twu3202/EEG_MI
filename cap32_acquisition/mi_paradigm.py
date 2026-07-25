@@ -133,19 +133,30 @@ MI_TASKS = {
 # ready-made task sets. Mixed motor+cognitive sets are usually the EASIEST to decode on a
 # dry cap — different networks beat fine left-vs-right spatial resolution.
 TASK_SETS = {
-    # Ordered EASIEST → HARDEST for this dry cap, based on the first real 30-trial session:
-    # left-vs-right gave AUC ~0.60 with permutation p=0.41 (i.e. chance), because separating
-    # C3 from C4 needs fine lateral resolution a dry cap does not deliver. Prefer contrasts
+    # Ordered EASIEST → HARDEST for this dry cap, from the first real 30-trial session:
+    # left-vs-right gave AUC ~0.60 with permutation p=0.41 (chance), because separating C3
+    # from C4 needs fine lateral resolution a dry cap does not deliver. Prefer contrasts
     # that differ in WHICH NETWORK is engaged, not in which hemisphere.
-    "① 双手 / 休息  (先验证有没有信号)": ["hands", "rest"],
-    "② 双手 / 减7   (运动 vs 认知,最易分)": ["hands", "math"],
-    "③ 双手 / 双脚  (手外侧 vs 脚内侧 Cz)": ["hands", "feet"],
-    "④ 减7 / 放歌   (额区 vs 颞区)": ["math", "song"],
-    "⑤ 双手 / 双脚 / 减7  (3 类)": ["hands", "feet", "math"],
-    "⑥ 认知 4 类 (减7/想词/放歌/走房间)": ["math", "words", "song", "navigate"],
-    "⑦ 筛选 8 类 (个性化选任务)": ["rest", "hands", "feet", "left",
-                                    "math", "words", "song", "navigate"],
-    "⑧ 左手 / 右手  (最难,实测≈随机)": ["left", "right"],
+    "① 双手 / 休息":   ["hands", "rest"],
+    "② 双手 / 减7":    ["hands", "math"],
+    "③ 双手 / 双脚":   ["hands", "feet"],
+    "④ 减7 / 放歌":    ["math", "song"],
+    "⑤ 手 / 脚 / 减7": ["hands", "feet", "math"],
+    "⑥ 认知 4 类":     ["math", "words", "song", "navigate"],
+    "⑦ 筛选 8 类":     ["rest", "hands", "feet", "left", "math", "words", "song", "navigate"],
+    "⑧ 左手 / 右手":   ["left", "right"],
+}
+
+# why each set, shown as a tooltip in the GUI dropdown
+TASK_SET_WHY = {
+    "① 双手 / 休息":   "先验证到底有没有 MI 信号 —— 最基本的检验,建议第一个跑",
+    "② 双手 / 减7":    "运动 vs 认知,调动完全不同的网络,干电极上预期最好分",
+    "③ 双手 / 双脚":   "手在外侧 C3/C4、脚在内侧 Cz,空间差异大,不需要左右侧化",
+    "④ 减7 / 放歌":    "额区(心算) vs 颞区(听觉想象)",
+    "⑤ 手 / 脚 / 减7": "三类:运动外侧 / 运动内侧 / 认知",
+    "⑥ 认知 4 类":     "减7 / 想词 / 放歌 / 走房间 —— 全认知任务",
+    "⑦ 筛选 8 类":     "跑一轮筛选,用数据帮你选出最可分的组合",
+    "⑧ 左手 / 右手":   "⚠ 最难:需要精细的 C3/C4 侧化,本机实测 ≈ 随机 (p=0.41)",
 }
 
 # background tint per phase — makes the current state unmistakable, even peripherally

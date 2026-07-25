@@ -264,6 +264,20 @@ def _card(QtWidgets):
 
 
 FORMAT_VERSION = 2
+SAVE_EXTS = (".npz", ".json", "_raw.fif")
+
+
+def _unique_base(outdir, stem):
+    """Never overwrite an existing recording. The timestamp has 1 s resolution, so two runs
+    of the SAME task set inside one second (or a re-save) would otherwise collide and
+    silently destroy the earlier data. Append _2, _3, … until every output path is free."""
+    base = os.path.join(outdir, stem)
+    if not any(os.path.exists(base + e) for e in SAVE_EXTS):
+        return base
+    k = 2
+    while any(os.path.exists(f"{base}_{k}{e}") for e in SAVE_EXTS):
+        k += 1
+    return f"{base}_{k}"
 
 
 def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
@@ -286,7 +300,7 @@ def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
     Also writes an MNE `.fif` with imagery onsets as task-labelled annotations."""
     os.makedirs(outdir, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    base = os.path.join(outdir, f"cap32_{stamp}" + (f"_{tag}" if tag else ""))
+    base = _unique_base(outdir, f"cap32_{stamp}" + (f"_{tag}" if tag else ""))
 
     fields = dict(data=data.astype(np.float32), trigger=trig.astype(np.int32),
                   marker=marker.astype(np.int32), fs=float(fs),
@@ -385,10 +399,16 @@ def build(fs, source_kind, host, port, note=""):
     btn_rec = chip("● Record", "#eef1f5", TXT)
 
     # MI paradigm controls — task sets incl. cognitive tasks (减7 / 想词 / 放歌 / 走房间)
-    from mi_paradigm import TASK_SETS
-    task_cb = field(QtWidgets.QComboBox(), 172)
+    from mi_paradigm import TASK_SETS, TASK_SET_WHY
+    task_cb = field(QtWidgets.QComboBox(), 132)
     task_cb.addItems(list(TASK_SETS))
-    reps_sp = field(QtWidgets.QSpinBox(), 54); reps_sp.setRange(2, 60); reps_sp.setValue(15)
+    for i, k in enumerate(TASK_SETS):                       # hover explains WHY each set
+        task_cb.setItemData(i, f"{k}\n{TASK_SET_WHY.get(k,'')}\n任务: {TASK_SETS[k]}",
+                            QtCore.Qt.ItemDataRole.ToolTipRole)
+    task_cb.currentTextChanged.connect(
+        lambda k: task_cb.setToolTip(TASK_SET_WHY.get(k, "")))
+    task_cb.setToolTip(TASK_SET_WHY.get(task_cb.currentText(), ""))
+    reps_sp = field(QtWidgets.QSpinBox(), 54); reps_sp.setRange(2, 60); reps_sp.setValue(25)   # 15/class gave CIs too wide to conclude
     btn_task = chip("▶ MI Task", "#2f855a")
 
     def vsep():
@@ -742,7 +762,8 @@ def run_live(fs, source_kind, host, port):
                           loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3),
                           samples_filled=int(r.filled)))
             base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS,
-                                  trials=trials, meta=meta, tag="mi", gap=gap)
+                                  trials=trials, meta=meta, gap=gap,
+                                  tag="-".join(tasks))
             ctx["stat"].setText(
                 f"✅ 完成 · {len(trials)} trials · 丢包 {meta['link']['loss_pct']}% · "
                 f"saved {base}.npz  →  python src/analysis/erd_ers.py {base}.npz")
