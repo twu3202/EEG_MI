@@ -43,7 +43,8 @@ def load_npz(path):
     ch = [str(c) for c in z["ch_names"]] if "ch_names" in z else list(CAP32_CHANNELS)
     trigger = z["trigger"].astype(np.int64) if "trigger" in z else np.zeros(data.shape[1], int)
     marker = z["marker"].astype(np.int64) if "marker" in z else None
-    rec = dict(data=data, fs=fs, ch_names=ch, trigger=trigger, marker=marker)
+    gap = z["gap"].astype(np.int8) if "gap" in z else None      # 1 = reconstructed sample
+    rec = dict(data=data, fs=fs, ch_names=ch, trigger=trigger, marker=marker, gap=gap)
     # format v2: explicit trial table + metadata written by the paradigm
     if "trial_onset" in z:
         rec["trials"] = dict(onset=z["trial_onset"].astype(np.int64),
@@ -177,12 +178,22 @@ def clean_raw(raw, l_freq=1.0, h_freq=40.0, notch=50.0, car=False,
 # --------------------------------------------------------------------- epochs
 def make_epochs(path, tmin=DEFAULT_TMIN, tmax=DEFAULT_TMAX, baseline=DEFAULT_BASELINE,
                 picks=None, l_freq=1.0, h_freq=40.0, notch=50.0, car=False,
-                interpolate=True, reject_uv=None, verbose=True):
+                interpolate=True, reject_uv=None, verbose=True, drop_filled=False):
     """Recording path → cleaned, baseline-corrected MI Epochs (labelled by task name)."""
     import mne
     raw, events, event_id = read_recording(path)
     if len(events) == 0:
         raise SystemExit(f"no events/markers found in {path} — was a paradigm run recorded?")
+    if drop_filled and str(path).endswith(".npz"):
+        gap = load_npz(path).get("gap")
+        if gap is not None and gap.any():        # drop trials overlapping reconstructed data
+            fs0 = raw.info["sfreq"]
+            lo, hi = int(tmin * fs0), int(tmax * fs0)
+            keep = [not gap[max(0, o + lo): o + hi].any() for o in events[:, 0]]
+            n_drop = len(keep) - sum(keep)
+            events = events[np.array(keep, bool)]
+            if verbose and n_drop:
+                print(f"  dropped {n_drop} epoch(s) containing UDP-gap-filled samples")
     raw, bad = clean_raw(raw, l_freq, h_freq, notch, car, interpolate, verbose)
     reject = dict(eeg=reject_uv * 1e-6) if reject_uv else None
     ep = mne.Epochs(raw, events, event_id=event_id, tmin=tmin, tmax=tmax,

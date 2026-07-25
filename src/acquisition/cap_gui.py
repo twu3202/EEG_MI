@@ -99,16 +99,21 @@ class Receiver(threading.Thread):
         self.src = None                  # set once connected; lets the GUI send %/*/TXXXX
         self.recording = False
         self.marker = 0                  # software marker (set by the paradigm)
-        self._rec, self._rec_trig, self._rec_marker = [], [], []
+        self._rec, self._rec_trig, self._rec_marker, self._rec_gap = [], [], [], []
         self._rec_n = 0                  # samples recorded so far (for trial sample indices)
+        self._last_sample = None
+        self.filled = 0                  # samples reconstructed to cover dropped frames
         self.car = True                  # live toggle: common average reference
         self.deblink = None              # live toggle: a calibrated LiveDeblink operator or None
         self.calib = Ring(n_ch, int(30 * fs))   # rolling buffer for ICA calibration
 
     # ---- recording ----
+    MAX_FILL = 2500                      # ≥10 s at 250 Hz; beyond this don't reconstruct
+
     def start_rec(self):
-        self._rec, self._rec_trig, self._rec_marker = [], [], []
+        self._rec, self._rec_trig, self._rec_marker, self._rec_gap = [], [], [], []
         self._rec_n = 0
+        self.filled = 0
         self.recording = True
 
     def rec_len(self):
@@ -122,17 +127,33 @@ class Receiver(threading.Thread):
         data = np.concatenate(self._rec, axis=1)          # (n_ch, N) RAW µV (pre-CAR)
         trig = np.concatenate(self._rec_trig)
         marker = np.concatenate(self._rec_marker)
-        return data, trig, marker
+        gap = np.concatenate(self._rec_gap)
+        return data, trig, marker, gap
+
+    def _fill_gap(self, n, nxt, trigger):
+        """A dropped frame is a MISSING SAMPLE. Skipping it silently compresses the
+        recording's time axis — every downstream latency and frequency estimate then
+        drifts (an ERD window would land early, mu/beta would read slightly high). So we
+        insert `n` linearly-interpolated samples to keep sample-index ↔ wall-clock exact,
+        and flag them in a `gap` track so analysis can exclude affected epochs."""
+        n = int(min(n, self.MAX_FILL))
+        a, b = self._last_sample, nxt
+        w = (np.arange(1, n + 1, dtype=np.float32) / (n + 1))[None, :]
+        fill = (a + (b - a) * w).astype(np.float32)       # (n_ch, n)
+        self._emit(fill)
+        self._record(fill, trigger, filled=True)
+        self.filled += n
 
     def set_marker(self, code):
         self.marker = int(code)
 
-    def _record(self, raw_chunk, trigger):
+    def _record(self, raw_chunk, trigger, filled=False):
         if self.recording:
             m = raw_chunk.shape[1]
             self._rec.append(raw_chunk.astype(np.float32))
             self._rec_trig.append(np.full(m, trigger, dtype=np.int32))
             self._rec_marker.append(np.full(m, self.marker, dtype=np.int32))
+            self._rec_gap.append(np.full(m, 1 if filled else 0, dtype=np.int8))
             self._rec_n += m
 
     def send(self, data: bytes):
@@ -183,12 +204,17 @@ class Receiver(threading.Thread):
                 if parsed is None:
                     continue
                 sample, seq, trigger = parsed
-                if self._last_seq is not None:
-                    self.lost += (seq - self._last_seq - 1) % 256
-                self._last_seq = seq
                 s = sample.reshape(self.n_ch, 1)
+                gap = 0
+                if self._last_seq is not None:
+                    gap = (seq - self._last_seq - 1) % 256
+                    self.lost += gap
+                self._last_seq = seq
+                if gap and self._last_sample is not None:
+                    self._fill_gap(gap, s, trigger)   # keep the time axis honest
                 self._emit(s)
                 self._record(s, trigger)
+                self._last_sample = s
                 if self.n % (int(self.fs) * 2) == 0:
                     self._stat()
         except Exception as e:
@@ -232,13 +258,15 @@ FORMAT_VERSION = 2
 
 
 def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
-                   trials=None, meta=None, tag=None):
+                   trials=None, meta=None, tag=None, gap=None):
     """Save a self-describing recording.
 
     `.npz` (format v2) contains:
       data      (n_ch, N) float32  RAW µV, pre-CAR, unfiltered  — the ground truth
       trigger   (N,)      int32    hardware trigger bytes from the board
       marker    (N,)      int32    software marker: MI task code during imagery, else 0
+      gap       (N,)      int8     1 = sample RECONSTRUCTED to cover a dropped UDP frame
+                                   (interpolated; exclude these epochs for strict analysis)
       fs, ch_names
       trial_*   (T,)               explicit trial table (onset SAMPLE indices + labels),
                                    written by the paradigm — more precise & unambiguous
@@ -254,6 +282,8 @@ def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
     fields = dict(data=data.astype(np.float32), trigger=trig.astype(np.int32),
                   marker=marker.astype(np.int32), fs=float(fs),
                   ch_names=np.array(list(ch_names)), format_version=FORMAT_VERSION)
+    if gap is not None:
+        fields["gap"] = gap.astype(np.int8)
     trials = trials or []
     if trials:
         fields.update(
@@ -264,6 +294,9 @@ def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
             trial_cue_onset=np.array([t.get("cue", -1) for t in trials], dtype=np.int64),
             trial_end=np.array([t.get("rest", -1) for t in trials], dtype=np.int64))
     meta = dict(meta or {})
+    if gap is not None:
+        meta["n_filled_samples"] = int(gap.sum())
+        meta["filled_pct"] = round(100.0 * float(gap.sum()) / max(1, gap.size), 4)
     meta.update(format_version=FORMAT_VERSION, saved=stamp, n_samples=int(data.shape[1]),
                 n_channels=int(data.shape[0]), sfreq=float(fs), n_trials=len(trials),
                 duration_s=round(data.shape[1] / float(fs), 2), units="microvolts",
@@ -634,13 +667,14 @@ def run_live(fs, source_kind, host, port):
             out = r.stop_rec(); ctx["ctrls"]["rec"].setText("● Record")
             if out is None:
                 ctx["stat"].setText("no data recorded"); return
-            data, trig, marker = out
+            data, trig, marker, gap = out
             meta = dict(paradigm=dict(kind="free-run (no paradigm)"),
                         acquisition=dict(source=r.kind, sfreq=float(ctx["fs"]),
                                          car=bool(r.car), channels=list(CAP32_CHANNELS)),
                         link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
                                   loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3)))
-            base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS, meta=meta)
+            base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS,
+                                  meta=meta, gap=gap)
             ctx["stat"].setText(f"saved {base}.npz  ({data.shape[1]} samples, "
                                 f"{data.shape[1]/ctx['fs']:.1f}s)")
     ctx["ctrls"]["rec"].clicked.connect(toggle_rec)
@@ -683,7 +717,7 @@ def run_live(fs, source_kind, host, port):
             r.set_marker(0)
             if out is None:
                 ctx["stat"].setText("任务结束但没有数据"); return
-            data, trig, marker = out
+            data, trig, marker, gap = out
             meta = dict(
                 paradigm=dict(kind="motor-imagery", tasks=tasks, reps=reps,
                               imagery_mode=mode, sequence=seq,
@@ -696,9 +730,10 @@ def run_live(fs, source_kind, host, port):
                                                      notch50=c["notch"].isChecked()),
                                  channels=list(CAP32_CHANNELS)),
                 link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
-                          loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3)))
+                          loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3),
+                          samples_filled=int(r.filled)))
             base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS,
-                                  trials=trials, meta=meta, tag="mi")
+                                  trials=trials, meta=meta, tag="mi", gap=gap)
             ctx["stat"].setText(
                 f"✅ 完成 · {len(trials)} trials · 丢包 {meta['link']['loss_pct']}% · "
                 f"saved {base}.npz  →  python src/analysis/erd_ers.py {base}.npz")
