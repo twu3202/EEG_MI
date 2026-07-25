@@ -1,32 +1,37 @@
 # PORTABLE COPY — synced from src/ (edit src/, then re-run sync). Flat-folder imports.
 #!/usr/bin/env python
-"""Motor-imagery paradigm — timed left / right / feet / rest cues with triggers.
+"""Motor-imagery paradigm — a full-screen cue window that tells you EXACTLY what to
+imagine, right now, in huge type.
 
-This is the "刺激范式 + 打标" piece: it shows the subject *what to imagine and when*,
-and at the exact moment imagery begins it fires an event so that marker lands in the
-EEG recording. Afterwards the analysis loader cuts the continuous EEG into labelled
-epochs on those markers.
+Design goal: while you are doing imagery you should NOT be looking at (or thinking about)
+the EEG scope. So the cue lives in its own borderless full-screen window — on a SECOND
+MONITOR if you have one — showing one unmistakable instruction at a time:
 
-Each trial runs a 4-phase state machine:
+    准备…            ->            现在想象                ->     休息
+                                  ← 左  手
+                              持续想象握拳的感觉,不要真的动
+                                      ⏱ 3
 
-    fixation  →  cue (arrow, "prepare")  →  IMAGERY (go, imagine now)  →  rest
-      1.5s          1.5s                        4.0s                       2.0s
-                                            └── marker fires here ──┘
+Each trial is a 4-phase state machine; the marker fires at IMAGERY onset, which is what
+the analysis epochs on:
+
+    fixation  →  cue (准备, 知道下一个是什么)  →  IMAGERY (打标)  →  rest
+      1.5s          1.5s                            4.0s              2.0s
 
 Two ways to use it:
 
-  1. Embedded in cap_gui (recommended — one process, guaranteed sample alignment):
+  1. Embedded in cap_gui (recommended — one process, sample-accurate marking):
         pab = MiParadigm(seq, timing, on_event=handler, send_trigger=recv.send)
         pab.finished.connect(on_done); pab.start()
-     `on_event(phase, name, code)` is called at every phase boundary. cap_gui uses it to
-     stamp the recording's software marker (guaranteed) and, at imagery onset, also push
-     the hardware `TXXXX` to the board via `send_trigger`.
+     `on_event(phase, name, code)` fires at every phase boundary; cap_gui uses it to stamp
+     the recording's software marker and push the hardware `TXXXX` at imagery onset.
 
-  2. Standalone (preview / a separate marker-only session):
-        python mi_paradigm.py                       # just the cue window
-        python mi_paradigm.py --lsl                  # + push an LSL 'MI_Cues' stream
+  2. Standalone (practice / preview):
+        python mi_paradigm.py                            # practice run, no recording
         python mi_paradigm.py --tasks left right feet --reps 12
-        python mi_paradigm.py --screenshot results/mi_paradigm_preview.png
+        python mi_paradigm.py --mode visual              # visual instead of kinesthetic
+        python mi_paradigm.py --screen 1                 # force monitor #1
+        python mi_paradigm.py --screenshot out.png --phase imagery
 """
 from __future__ import annotations
 
@@ -40,28 +45,52 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))            # src/
 from mi_events import MI_TASK_CODES       # noqa: E402
 
+FONT = "'PingFang SC','Microsoft YaHei','Helvetica Neue',Helvetica,Arial,sans-serif"
+
 
 # --------------------------------------------------------------------- tasks
 @dataclass
 class MiTask:
     name: str
-    glyph: str          # big central symbol shown during cue + imagery
-    label: str          # word under the glyph
-    instr: str          # one-line instruction
+    glyph: str          # arrow / symbol shown next to the word
+    cn: str             # the BIG word (what you actually read)
+    en: str
+    kmi: str            # kinesthetic instruction (feel it)
+    vmi: str            # visual instruction (see it)
     color: str
 
     @property
     def code(self) -> int:
         return MI_TASK_CODES[self.name]
 
+    def instr(self, mode="kinesthetic"):
+        return self.vmi if mode.startswith("v") else self.kmi
+
 
 MI_TASKS = {
-    "left":  MiTask("left",  "←", "LEFT hand",  "想象左手握拳 · 不要真的动",  "#2b6cb0"),
-    "right": MiTask("right", "→", "RIGHT hand", "想象右手握拳 · 不要真的动",  "#2b6cb0"),
-    "feet":  MiTask("feet",  "↓", "FEET",       "想象双脚下踩 · 不要真的动",  "#2f855a"),
-    "tongue":MiTask("tongue","●", "TONGUE",     "想象舌抵上颚",              "#805ad5"),
-    "rest":  MiTask("rest",  "+",      "Rest",       "放松 · 盯着十字 · 什么都不想", "#718096"),
+    "left": MiTask(
+        "left", "←", "左手", "LEFT hand",
+        "持续想象【左手】握拳发力的感觉 · 不要真的动",
+        "在脑中看到自己的【左手】反复握拳 · 不要真的动", "#1d6fbf"),
+    "right": MiTask(
+        "right", "→", "右手", "RIGHT hand",
+        "持续想象【右手】握拳发力的感觉 · 不要真的动",
+        "在脑中看到自己的【右手】反复握拳 · 不要真的动", "#c0392b"),
+    "feet": MiTask(
+        "feet", "↓", "双脚", "FEET",
+        "持续想象【双脚】用力下踩的感觉 · 不要真的动",
+        "在脑中看到自己的【双脚】反复下踩 · 不要真的动", "#2f855a"),
+    "tongue": MiTask(
+        "tongue", "●", "舌头", "TONGUE",
+        "持续想象【舌尖抵住上颚】的感觉 · 不要真的动",
+        "在脑中看到自己的舌尖抵住上颚", "#805ad5"),
+    "rest": MiTask(
+        "rest", "+", "休息", "Rest",
+        "放松 · 看着十字 · 什么都不想", "放松 · 看着十字 · 什么都不想", "#6b7480"),
 }
+
+# background tint per phase — makes the current state unmistakable, even peripherally
+TINT = {"fixation": "#ffffff", "cue": "#fff8e8", "imagery": "#eefaf1", "rest": "#f4f6f8"}
 
 
 @dataclass
@@ -70,6 +99,8 @@ class Timing:
     cue: float = 1.5
     imagery: float = 4.0
     rest: float = 2.0
+    break_every: int = 0        # 0 = no breaks; else pause every N trials
+    jitter: float = 0.0         # ± random seconds added to fixation (avoid rhythm/anticipation)
 
     @property
     def trial(self) -> float:
@@ -90,76 +121,119 @@ def make_sequence(task_names, reps, seed=7):
 
 
 # --------------------------------------------------------------- the cue window
-def _build_paradigm_class():
-    """Import Qt lazily so the module (and make_sequence) works with no display."""
-    from PyQt6 import QtWidgets, QtCore, QtGui
+_CLS = None
+
+
+def _paradigm_class():
+    """Build (once) the Qt widget class — imported lazily so this module works headless."""
+    global _CLS
+    if _CLS is not None:
+        return _CLS
+    from PyQt6 import QtWidgets, QtCore
 
     class MiParadigm(QtWidgets.QWidget):
         finished = QtCore.pyqtSignal()
-        phase_sig = QtCore.pyqtSignal(str, str, int)   # phase, name, code
+        phase_sig = QtCore.pyqtSignal(str, str, int)   # phase, task-name, code (code>0 = imagery)
 
         PHASES = ("fixation", "cue", "imagery", "rest")
 
         def __init__(self, seq, timing=None, on_event=None, send_trigger=None,
-                     light=True, parent=None):
+                     light=True, mode="kinesthetic", parent=None):
             super().__init__(parent)
             self.seq = list(seq)
             self.timing = timing or Timing()
             self.send_trigger = send_trigger
+            self.mode = mode
             if on_event is not None:
                 self.phase_sig.connect(lambda p, n, c: on_event(p, n, c))
             self._i = -1
             self._phase = None
+            self._paused = False
             self._light = light
+            self._rng = __import__("random").Random(11)
             self._build_ui()
             self._timer = QtCore.QTimer(self); self._timer.setSingleShot(True)
             self._timer.timeout.connect(self._next_phase)
+            self._clock = QtCore.QElapsedTimer()
+            self._phase_ms = 0
+            self._tick_t = QtCore.QTimer(self); self._tick_t.timeout.connect(self._tick)
 
-        # ---- ui ----
+        # ------------------------------------------------------------------ ui
         def _build_ui(self):
-            bg, fg, sub = ("#ffffff", "#1f2733", "#6b7480") if self._light else ("#0e1116", "#e8edf4", "#8b95a5")
-            self._bg, self._fg, self._sub = bg, fg, sub
-            self.setStyleSheet(f"background:{bg};")
-            v = QtWidgets.QVBoxLayout(self); v.setContentsMargins(0, 0, 0, 0)
-            self.top = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-            self.top.setStyleSheet(f"color:{sub};font-size:16px;font-family:'Helvetica Neue',Arial;")
-            self.glyph = QtWidgets.QLabel("+", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-            self.glyph.setStyleSheet(f"color:{fg};font-size:220px;font-weight:300;font-family:'Helvetica Neue',Arial;")
-            self.word = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-            self.word.setStyleSheet(f"color:{fg};font-size:40px;font-weight:600;font-family:'Helvetica Neue',Arial;")
-            self.instr = QtWidgets.QLabel("按 SPACE 开始 · ESC 退出",
-                                          alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-            self.instr.setStyleSheet(f"color:{sub};font-size:22px;font-family:'Helvetica Neue',Arial;")
-            v.addStretch(2); v.addWidget(self.top); v.addStretch(1)
-            v.addWidget(self.glyph); v.addWidget(self.word); v.addStretch(1)
-            self.bar = QtWidgets.QProgressBar(); self.bar.setTextVisible(False); self.bar.setFixedHeight(6)
-            self.bar.setStyleSheet(
-                f"QProgressBar{{background:{'#eceef1' if self._light else '#1b2029'};border:none;border-radius:3px;}}"
-                f"QProgressBar::chunk{{background:#2b6cb0;border-radius:3px;}}")
-            v.addWidget(self.instr); v.addStretch(1); v.addWidget(self.bar)
-            self.bar.setRange(0, len(self.seq)); self.bar.setValue(0)
+            self.setStyleSheet(f"background:#ffffff;")
+            v = QtWidgets.QVBoxLayout(self)
+            v.setContentsMargins(60, 34, 60, 34); v.setSpacing(0)
 
-        # ---- run control ----
+            self.top = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.top.setStyleSheet(f"color:#98a1ad;font-size:19px;letter-spacing:2px;font-family:{FONT};")
+            v.addWidget(self.top)
+            v.addStretch(2)
+
+            self.kicker = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.kicker.setStyleSheet(f"color:#8a929e;font-size:36px;letter-spacing:6px;font-family:{FONT};")
+            v.addWidget(self.kicker)
+            v.addSpacing(6)
+
+            self.word = QtWidgets.QLabel("+", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.word.setStyleSheet(f"color:#1f2733;font-size:200px;font-weight:700;font-family:{FONT};")
+            v.addWidget(self.word)
+            v.addSpacing(10)
+
+            self.instr = QtWidgets.QLabel("按 SPACE 开始   ·   ESC 退出",
+                                          alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.instr.setStyleSheet(f"color:#6b7480;font-size:31px;font-family:{FONT};")
+            v.addWidget(self.instr)
+            v.addStretch(1)
+
+            self.count = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.count.setStyleSheet(f"color:#b9c0ca;font-size:74px;font-weight:300;font-family:{FONT};")
+            v.addWidget(self.count)
+            v.addStretch(2)
+
+            self.phase_bar = QtWidgets.QProgressBar()          # time left in THIS phase
+            self.phase_bar.setTextVisible(False); self.phase_bar.setFixedHeight(10)
+            self.phase_bar.setRange(0, 1000)
+            v.addWidget(self.phase_bar)
+            v.addSpacing(8)
+
+            self.bar = QtWidgets.QProgressBar()                # overall run progress
+            self.bar.setTextVisible(False); self.bar.setFixedHeight(5)
+            self.bar.setRange(0, max(1, len(self.seq))); self.bar.setValue(0)
+            self.bar.setStyleSheet(
+                "QProgressBar{background:#edeff2;border:none;border-radius:2px;}"
+                "QProgressBar::chunk{background:#c3cad4;border-radius:2px;}")
+            v.addWidget(self.bar)
+
+        def _set_phase_bar(self, color):
+            self.phase_bar.setStyleSheet(
+                "QProgressBar{background:#e9ecf0;border:none;border-radius:5px;}"
+                f"QProgressBar::chunk{{background:{color};border-radius:5px;}}")
+
+        # --------------------------------------------------------- run control
         def start(self):
-            """Begin immediately (used when embedded). Standalone waits for SPACE."""
-            self.instr.setText("")
+            """Begin immediately (used when embedded; standalone waits for SPACE)."""
             self._i, self._phase = -1, None
             self._next_phase()
 
         def keyPressEvent(self, e):
             from PyQt6 import QtCore as _c
-            if e.key() == _c.Qt.Key.Key_Escape:
+            k = e.key()
+            if k == _c.Qt.Key.Key_Escape:
                 self._abort()
-            elif e.key() == _c.Qt.Key.Key_Space and self._phase is None and self._i < 0:
-                self.start()
+            elif k == _c.Qt.Key.Key_Space:
+                if self._paused:                       # resume from a break
+                    self._paused = False
+                    self._next_phase()
+                elif self._phase is None and self._i < 0:
+                    self.start()
 
         def _abort(self):
-            self._timer.stop()
-            self._emit_marker("rest", MI_TASKS["rest"], resting=True)  # clear any live marker
+            self._timer.stop(); self._tick_t.stop()
+            self.phase_sig.emit("abort", "", 0)         # clears any live marker
             self.finished.emit()
             self.close()
 
-        def _cur_task(self):
+        def _cur(self):
             return MI_TASKS[self.seq[self._i]]
 
         def _next_phase(self):
@@ -168,99 +242,163 @@ def _build_paradigm_class():
                 self._i += 1
                 if self._i >= len(self.seq):
                     self._finish(); return
+                be = self.timing.break_every
+                if be and self._i and self._i % be == 0:
+                    self._show_break(); return
                 self._phase = "fixation"
                 self.bar.setValue(self._i)
             else:
                 self._phase = self.PHASES[self.PHASES.index(self._phase) + 1]
+
+            dur = float(getattr(self.timing, self._phase))
+            if self._phase == "fixation" and self.timing.jitter:
+                dur += self._rng.uniform(-self.timing.jitter, self.timing.jitter)
+            self._phase_ms = max(200, int(dur * 1000))
             self._render()
             self._fire()
-            dur = getattr(self.timing, self._phase)
-            self._timer.start(int(dur * 1000))
+            self._clock.restart(); self._tick_t.start(50); self._tick()
+            self._timer.start(self._phase_ms)
 
-        def _render(self):
-            t = self._cur_task()
-            self.top.setText(f"trial {self._i + 1} / {len(self.seq)}   ·   {self._phase.upper()}")
-            if self._phase == "fixation" or self._phase == "rest":
-                self.glyph.setText("+")
-                self.glyph.setStyleSheet(f"color:{self._sub};font-size:220px;font-weight:300;font-family:'Helvetica Neue',Arial;")
-                self.word.setText("")
-                self.instr.setText("准备" if self._phase == "fixation" else "休息")
-            elif self._phase == "cue":
-                self.glyph.setText(t.glyph)
-                self.glyph.setStyleSheet(f"color:{t.color};font-size:220px;font-weight:300;font-family:'Helvetica Neue',Arial;")
-                self.word.setText(t.label); self.word.setStyleSheet(
-                    f"color:{t.color};font-size:40px;font-weight:600;font-family:'Helvetica Neue',Arial;")
-                self.instr.setText(t.instr + "  （准备…）")
-            elif self._phase == "imagery":
-                self.glyph.setText(t.glyph)
-                self.glyph.setStyleSheet(f"color:{t.color};font-size:250px;font-weight:500;font-family:'Helvetica Neue',Arial;")
-                self.word.setText(t.label)
-                self.instr.setText("▶  现在开始想象")
-
-        def _fire(self):
-            """Emit the marker + hardware trigger for the current phase."""
-            t = self._cur_task()
-            if self._phase == "imagery":
-                self._emit_marker("imagery", t, resting=False)
+        def _tick(self):
+            left = max(0, self._phase_ms - self._clock.elapsed())
+            self.phase_bar.setValue(int(1000 * left / self._phase_ms))
+            if self._phase in ("imagery", "cue"):
+                self.count.setText(f"{left/1000:.0f}")
             else:
-                self._emit_marker(self._phase, t, resting=True)
+                self.count.setText("")
 
-        def _emit_marker(self, phase, task, resting):
-            code = 0 if resting else task.code
-            self.phase_sig.emit(phase, task.name, code)
-            if not resting and self.send_trigger is not None:
-                try:
-                    from mi_events import hardware_trigger_bytes
-                    self.send_trigger(hardware_trigger_bytes(task.code))
-                except Exception:
-                    pass
+        # ------------------------------------------------------------ rendering
+        def _render(self):
+            t = self._cur()
+            ph = self._phase
+            self.setStyleSheet(f"background:{TINT[ph]};")
+            self.top.setText(f"{self._i + 1} / {len(self.seq)}      {ph.upper()}")
+
+            if ph == "fixation":
+                self.kicker.setText("")
+                self.word.setText("+")
+                self.word.setStyleSheet(f"color:#c3cad4;font-size:200px;font-weight:300;font-family:{FONT};")
+                self.instr.setText("放松,准备下一个")
+                self._set_phase_bar("#c3cad4")
+
+            elif ph == "cue":
+                self.kicker.setText("准 备")
+                self.word.setText(f"{t.glyph} {t.cn}" if t.name != "rest" else t.cn)
+                self.word.setStyleSheet(f"color:{t.color};font-size:170px;font-weight:700;"
+                                        f"font-family:{FONT};")
+                self.instr.setText("马上开始 —— 先别动,等提示")
+                self._set_phase_bar("#e0a800")
+
+            elif ph == "imagery":
+                self.kicker.setText("现 在 想 象" if t.name != "rest" else "现 在")
+                self.word.setText(f"{t.glyph} {t.cn}" if t.name != "rest" else t.cn)
+                self.word.setStyleSheet(f"color:{t.color};font-size:210px;font-weight:800;"
+                                        f"font-family:{FONT};")
+                self.instr.setText(t.instr(self.mode))
+                self._set_phase_bar("#2e9e5b")
+
+            elif ph == "rest":
+                self.kicker.setText("")
+                self.word.setText("休息")
+                self.word.setStyleSheet(f"color:#aab2bd;font-size:120px;font-weight:600;"
+                                        f"font-family:{FONT};")
+                self.instr.setText("放松,停止想象")
+                self._set_phase_bar("#c3cad4")
+
+        def _show_break(self):
+            self._paused = True
+            self._timer.stop(); self._tick_t.stop()
+            done, total = self._i, len(self.seq)
+            self.setStyleSheet("background:#ffffff;")
+            self.top.setText(f"{done} / {total}      BREAK")
+            self.kicker.setText("休 息 一 下")
+            self.word.setText("☕")
+            self.word.setStyleSheet(f"color:#1f2733;font-size:150px;font-family:{FONT};")
+            self.instr.setText(f"已完成 {done} / {total} —— 准备好后按 SPACE 继续")
+            self.count.setText(""); self.phase_bar.setValue(0)
+            self.phase_sig.emit("break", "", 0)
+
+        # ------------------------------------------------------------- markers
+        def _fire(self):
+            t = self._cur()
+            if self._phase == "imagery" and t.name != "rest":
+                self.phase_sig.emit("imagery", t.name, t.code)
+                if self.send_trigger is not None:
+                    try:
+                        from mi_events import hardware_trigger_bytes
+                        self.send_trigger(hardware_trigger_bytes(t.code))
+                    except Exception:
+                        pass
+            elif self._phase == "imagery":                      # rest trial: label it too
+                self.phase_sig.emit("imagery", t.name, t.code)
+            else:
+                self.phase_sig.emit(self._phase, t.name, 0)     # code 0 -> marker track clear
 
         def _finish(self):
-            self._timer.stop()
-            self.top.setText("完成 ✓"); self.glyph.setText("✓")
-            self.glyph.setStyleSheet(f"color:#2f855a;font-size:220px;font-family:'Helvetica Neue',Arial;")
-            self.word.setText(""); self.instr.setText(f"{len(self.seq)} trials 已记录")
+            self._timer.stop(); self._tick_t.stop()
+            self.setStyleSheet("background:#ffffff;")
+            self.top.setText(f"{len(self.seq)} / {len(self.seq)}      DONE")
+            self.kicker.setText("")
+            self.word.setText("✓")
+            self.word.setStyleSheet(f"color:#2f855a;font-size:200px;font-family:{FONT};")
+            self.instr.setText(f"完成 —— 共 {len(self.seq)} 个 trial,数据已保存")
+            self.count.setText(""); self.phase_bar.setValue(0)
             self.bar.setValue(len(self.seq))
             self.phase_sig.emit("end", "", 0)
             self.finished.emit()
 
-    return MiParadigm
+    _CLS = MiParadigm
+    return _CLS
 
 
 def MiParadigm(*a, **k):
-    return _build_paradigm_class()(*a, **k)
+    return _paradigm_class()(*a, **k)
+
+
+# ----------------------------------------------------------------- placement
+def place(widget, screen_idx=None, windowed=False):
+    """Put the cue window on its own screen: prefer a SECOND monitor so the EEG UI can stay
+    visible on the main one. Falls back to the primary screen (full-screen covers the UI,
+    which is also what we want — no distraction)."""
+    from PyQt6 import QtWidgets
+    app = QtWidgets.QApplication.instance()
+    screens = app.screens()
+    if screen_idx is None:
+        screen_idx = 1 if len(screens) > 1 else 0
+    screen_idx = max(0, min(screen_idx, len(screens) - 1))
+    geo = screens[screen_idx].geometry()
+    if windowed:
+        widget.setGeometry(geo.x() + 80, geo.y() + 80, 1100, 760)
+        widget.show()
+    else:
+        widget.setGeometry(geo)
+        widget.showFullScreen()
+    widget.raise_(); widget.activateWindow()
+    return screen_idx, len(screens)
 
 
 # ----------------------------------------------------------------- standalone
-def run_standalone(seq, timing, use_lsl=False, light=True):
+def run_standalone(seq, timing, mode, screen, windowed):
     from PyQt6 import QtWidgets
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    outlet = None
-    if use_lsl:
-        from pylsl import StreamInfo, StreamOutlet, local_clock  # noqa
-        outlet = StreamOutlet(StreamInfo("MI_Cues", "Markers", 1, 0, "string", "mi-cues-01"))
-
-    def on_event(phase, name, code):
-        if outlet is not None and phase in ("cue", "imagery", "rest", "end"):
-            from pylsl import local_clock
-            outlet.push_sample([f"{phase}/{name}" if name else phase], local_clock())
-
-    Cls = _build_paradigm_class()
-    w = Cls(seq, timing, on_event=on_event, light=light)
+    w = _paradigm_class()(seq, timing, mode=mode)
     w.setWindowTitle("MI paradigm")
     w.finished.connect(lambda: QtWidgets.QApplication.instance().quit())
-    w.showFullScreen()
+    idx, n = place(w, screen, windowed)
+    print(f"cue window on screen {idx} of {n}  ·  SPACE 开始 · ESC 退出")
     app.exec()
 
 
-def screenshot(seq, timing, out, light=True):
+def screenshot(seq, timing, out, mode, phase="imagery"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PyQt6 import QtWidgets
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    Cls = _build_paradigm_class()
-    w = Cls(seq, timing, light=light); w.resize(1000, 720)
-    w._i, w._phase = 0, "imagery"; w._render()     # freeze on an imagery frame for the preview
-    w.instr.setText("▶  现在开始想象   ( left-hand imagery )")
+    w = _paradigm_class()(seq, timing, mode=mode)
+    w.resize(1280, 860)
+    w._i, w._phase, w._phase_ms = 0, phase, 4000
+    w._render()
+    w.phase_bar.setValue(720)
+    w.count.setText("3" if phase in ("imagery", "cue") else "")
     w.show(); app.processEvents()
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     w.grab().save(str(out)); print("saved", out)
@@ -269,26 +407,31 @@ def screenshot(seq, timing, out, light=True):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--tasks", nargs="+", default=["left", "right"],
-                    choices=list(MI_TASKS), help="tasks to cue (default: left right)")
+    ap.add_argument("--tasks", nargs="+", default=["left", "right"], choices=list(MI_TASKS))
     ap.add_argument("--reps", type=int, default=15, help="trials per task (default 15)")
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--dark", action="store_true", help="dark cue screen (default: white)")
-    ap.add_argument("--lsl", action="store_true", help="also push an LSL 'MI_Cues' marker stream")
+    ap.add_argument("--mode", default="kinesthetic", choices=["kinesthetic", "visual"],
+                    help="KMI = feel the movement (default) · VMI = see the movement")
+    ap.add_argument("--imagery", type=float, default=4.0, help="imagery seconds per trial")
+    ap.add_argument("--break-every", type=int, default=0, help="pause every N trials")
+    ap.add_argument("--jitter", type=float, default=0.0, help="± s jitter on fixation")
+    ap.add_argument("--screen", type=int, default=None, help="monitor index (default: 2nd if present)")
+    ap.add_argument("--windowed", action="store_true", help="windowed instead of full-screen")
     ap.add_argument("--screenshot", default=None)
+    ap.add_argument("--phase", default="imagery", choices=["fixation", "cue", "imagery", "rest"])
     ap.add_argument("--dry-run", action="store_true", help="print the trial order and exit")
     args = ap.parse_args()
 
     seq = make_sequence(args.tasks, args.reps, args.seed)
-    timing = Timing()
+    timing = Timing(imagery=args.imagery, break_every=args.break_every, jitter=args.jitter)
     print(f"{len(args.tasks)} tasks × {args.reps} = {len(seq)} trials, "
-          f"~{timing.trial:.0f}s each → ~{len(seq)*timing.trial/60:.1f} min")
+          f"~{timing.trial:.0f}s each → ~{len(seq)*timing.trial/60:.1f} min  ·  mode={args.mode}")
     if args.dry_run:
         print(seq); return
     if args.screenshot:
-        screenshot(seq, timing, args.screenshot, light=not args.dark)
+        screenshot(seq, timing, args.screenshot, args.mode, args.phase)
     else:
-        run_standalone(seq, timing, use_lsl=args.lsl, light=not args.dark)
+        run_standalone(seq, timing, args.mode, args.screen, args.windowed)
 
 
 if __name__ == "__main__":

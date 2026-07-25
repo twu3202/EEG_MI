@@ -19,6 +19,7 @@ to the board, then auto-saves. Feed the recording to src/analysis (load.py, erd_
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import threading
@@ -100,6 +101,7 @@ class Receiver(threading.Thread):
         self.recording = False
         self.marker = 0                  # software marker (set by the paradigm)
         self._rec, self._rec_trig, self._rec_marker = [], [], []
+        self._rec_n = 0                  # samples recorded so far (for trial sample indices)
         self.car = True                  # live toggle: common average reference
         self.deblink = None              # live toggle: a calibrated LiveDeblink operator or None
         self.calib = Ring(n_ch, int(30 * fs))   # rolling buffer for ICA calibration
@@ -107,7 +109,12 @@ class Receiver(threading.Thread):
     # ---- recording ----
     def start_rec(self):
         self._rec, self._rec_trig, self._rec_marker = [], [], []
+        self._rec_n = 0
         self.recording = True
+
+    def rec_len(self):
+        """Samples recorded so far — lets the paradigm stamp exact trial sample indices."""
+        return self._rec_n
 
     def stop_rec(self):
         self.recording = False
@@ -127,6 +134,7 @@ class Receiver(threading.Thread):
             self._rec.append(raw_chunk.astype(np.float32))
             self._rec_trig.append(np.full(m, trigger, dtype=np.int32))
             self._rec_marker.append(np.full(m, self.marker, dtype=np.int32))
+            self._rec_n += m
 
     def send(self, data: bytes):
         if self.src is not None:
@@ -221,15 +229,50 @@ def _card(QtWidgets):
     return f, lay
 
 
-def save_recording(data, trig, marker, fs, ch_names, outdir="recordings"):
-    """Save RAW µV data (n_ch, N) + per-sample hardware trigger + software marker to .npz,
-    and an MNE .fif with imagery onsets as annotations (labelled by MI task) for analysis."""
+FORMAT_VERSION = 2
+
+
+def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
+                   trials=None, meta=None, tag=None):
+    """Save a self-describing recording.
+
+    `.npz` (format v2) contains:
+      data      (n_ch, N) float32  RAW µV, pre-CAR, unfiltered  — the ground truth
+      trigger   (N,)      int32    hardware trigger bytes from the board
+      marker    (N,)      int32    software marker: MI task code during imagery, else 0
+      fs, ch_names
+      trial_*   (T,)               explicit trial table (onset SAMPLE indices + labels),
+                                   written by the paradigm — more precise & unambiguous
+                                   than re-deriving edges from `marker`
+      meta_json str                JSON: paradigm (tasks/timing/sequence/imagery mode),
+                                   acquisition (source, fs, CAR/filter/de-blink state),
+                                   link quality (frames received/lost), session notes
+    Also writes an MNE `.fif` with imagery onsets as task-labelled annotations."""
     os.makedirs(outdir, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    base = os.path.join(outdir, f"cap32_{stamp}")
-    np.savez_compressed(base + ".npz", data=data.astype(np.float32),
-                        trigger=trig.astype(np.int32), marker=marker.astype(np.int32),
-                        fs=float(fs), ch_names=np.array(list(ch_names)))
+    base = os.path.join(outdir, f"cap32_{stamp}" + (f"_{tag}" if tag else ""))
+
+    fields = dict(data=data.astype(np.float32), trigger=trig.astype(np.int32),
+                  marker=marker.astype(np.int32), fs=float(fs),
+                  ch_names=np.array(list(ch_names)), format_version=FORMAT_VERSION)
+    trials = trials or []
+    if trials:
+        fields.update(
+            trial_index=np.array([t["trial"] for t in trials], dtype=np.int32),
+            trial_code=np.array([t["code"] for t in trials], dtype=np.int32),
+            trial_name=np.array([t["task"] for t in trials]),
+            trial_onset=np.array([t.get("imagery", -1) for t in trials], dtype=np.int64),
+            trial_cue_onset=np.array([t.get("cue", -1) for t in trials], dtype=np.int64),
+            trial_end=np.array([t.get("rest", -1) for t in trials], dtype=np.int64))
+    meta = dict(meta or {})
+    meta.update(format_version=FORMAT_VERSION, saved=stamp, n_samples=int(data.shape[1]),
+                n_channels=int(data.shape[0]), sfreq=float(fs), n_trials=len(trials),
+                duration_s=round(data.shape[1] / float(fs), 2), units="microvolts",
+                notes=meta.get("notes", "RAW µV, pre-CAR, unfiltered"))
+    fields["meta_json"] = json.dumps(meta, ensure_ascii=False, indent=1)
+    np.savez_compressed(base + ".npz", **fields)
+    with open(base + ".json", "w") as fh:                 # human-readable sidecar
+        json.dump(meta, fh, ensure_ascii=False, indent=1)
     try:
         import mne
         from mi_events import label_of
@@ -340,6 +383,11 @@ def build(fs, source_kind, host, port, note=""):
     cal_hint = QtWidgets.QLabel("先采≥15s再校准"); cal_hint.setStyleSheet(f"color:{SUB};font-size:11px;")
     crow.addWidget(cal_hint)
     crow.addStretch(1)
+    # imagery mode: kinesthetic (feel it) vs visual (see it) — big individual difference
+    mode_cb = field(QtWidgets.QComboBox(), 132)
+    mode_cb.addItems(["KMI 动觉(感觉)", "VMI 视觉(看到)"])
+    crow.addWidget(tag("imagery")); crow.addWidget(mode_cb)
+    crow.addSpacing(10); crow.addWidget(vsep()); crow.addSpacing(10)
     # view controls: vertical scale
     scale_cb = field(QtWidgets.QComboBox(), 78); scale_cb.addItems([f"±{s} µV" for s in SCALE_UV])
     scale_cb.setCurrentText("±100 µV")
@@ -466,7 +514,8 @@ def build(fs, source_kind, host, port, note=""):
                ctrls=dict(src=src_cb, host=host_e, port=port_e, rate=rate_cb, low=low_e,
                           high=high_e, notch=notch_cb, conn=btn_conn, rec=btn_rec,
                           task=task_cb, reps=reps_sp, taskbtn=btn_task,
-                          car=car_cb, deblink=deblink_cb, calibrate=btn_cal, scale=scale_cb))
+                          car=car_cb, deblink=deblink_cb, calibrate=btn_cal, scale=scale_cb,
+                          mode=mode_cb))
     return ctx
 
 
@@ -586,9 +635,14 @@ def run_live(fs, source_kind, host, port):
             if out is None:
                 ctx["stat"].setText("no data recorded"); return
             data, trig, marker = out
-            base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS)
-            ntrig = int((np.diff(marker) != 0).sum())
-            ctx["stat"].setText(f"saved {base}.npz  ({data.shape[1]} samples, {ntrig} marker edges)")
+            meta = dict(paradigm=dict(kind="free-run (no paradigm)"),
+                        acquisition=dict(source=r.kind, sfreq=float(ctx["fs"]),
+                                         car=bool(r.car), channels=list(CAP32_CHANNELS)),
+                        link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
+                                  loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3)))
+            base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS, meta=meta)
+            ctx["stat"].setText(f"saved {base}.npz  ({data.shape[1]} samples, "
+                                f"{data.shape[1]/ctx['fs']:.1f}s)")
     ctx["ctrls"]["rec"].clicked.connect(toggle_rec)
 
     # ---- MI paradigm ----
@@ -599,31 +653,67 @@ def run_live(fs, source_kind, host, port):
         r = rec["thread"]
         if not (r and r.is_alive()):
             ctx["stat"].setText("先 Connect 再开始任务"); return
-        from mi_paradigm import MiParadigm, make_sequence, Timing
-        tasks = _TASK_SETS[ctx["ctrls"]["task"].currentText()]
-        seq = make_sequence(tasks, ctx["ctrls"]["reps"].value())
-        r.start_rec(); ctx["ctrls"]["rec"].setText("■ Stop rec")
+        from mi_paradigm import MiParadigm, make_sequence, Timing, place, MI_TASKS
+        c = ctx["ctrls"]
+        tasks = _TASK_SETS[c["task"].currentText()]
+        reps = c["reps"].value()
+        mode = "visual" if c["mode"].currentIndex() else "kinesthetic"
+        seq = make_sequence(tasks, reps)
+        timing = Timing()
+        r.start_rec(); c["rec"].setText("■ Stop rec")
+
+        # ---- trial log: exact sample index of every cue / imagery / rest onset ----
+        trials, cur = [], {}
 
         def on_event(phase, name, code):
-            r.set_marker(code)      # code=0 except during imagery (the epoching label)
+            r.set_marker(code)          # 0 except during imagery (the epoching label)
+            if phase == "cue":
+                cur.clear()
+                cur.update(trial=len(trials), task=name,
+                           code=MI_TASKS[name].code, cue=r.rec_len())
+            elif phase == "imagery":
+                cur.setdefault("trial", len(trials)); cur.setdefault("task", name)
+                cur["code"] = code or MI_TASKS[name].code
+                cur["imagery"] = r.rec_len()
+            elif phase in ("rest", "end", "abort") and cur.get("imagery") is not None:
+                cur["rest"] = r.rec_len()
+                trials.append(dict(cur)); cur.clear()
 
         def on_done():
-            out = r.stop_rec(); ctx["ctrls"]["rec"].setText("● Record")
+            out = r.stop_rec(); c["rec"].setText("● Record")
             r.set_marker(0)
-            if out is not None:
-                data, trig, marker = out
-                base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS)
-                nt = int((np.diff(marker) != 0).sum()) // 2
-                ctx["stat"].setText(f"✅ 任务完成 · saved {base}.npz  ({nt} imagery trials) · "
-                                    f"分析: python src/analysis/erd_ers.py {base}.npz")
+            if out is None:
+                ctx["stat"].setText("任务结束但没有数据"); return
+            data, trig, marker = out
+            meta = dict(
+                paradigm=dict(kind="motor-imagery", tasks=tasks, reps=reps,
+                              imagery_mode=mode, sequence=seq,
+                              timing={k: getattr(timing, k) for k in
+                                      ("fixation", "cue", "imagery", "rest")}),
+                acquisition=dict(source=r.kind, host=r.host, port=r.port,
+                                 sfreq=float(ctx["fs"]), car=bool(r.car),
+                                 deblink=r.deblink is not None,
+                                 display_filter=dict(low=c["low"].text(), high=c["high"].text(),
+                                                     notch50=c["notch"].isChecked()),
+                                 channels=list(CAP32_CHANNELS)),
+                link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
+                          loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3)))
+            base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS,
+                                  trials=trials, meta=meta, tag="mi")
+            ctx["stat"].setText(
+                f"✅ 完成 · {len(trials)} trials · 丢包 {meta['link']['loss_pct']}% · "
+                f"saved {base}.npz  →  python src/analysis/erd_ers.py {base}.npz")
 
-        pab = MiParadigm(seq, Timing(), on_event=on_event, send_trigger=r.send, light=True)
+        pab = MiParadigm(seq, timing, on_event=on_event, send_trigger=r.send,
+                         light=True, mode=mode)
         pab.finished.connect(on_done)
         pab.setWindowTitle("MI paradigm — ESC to abort")
-        pab.showFullScreen()
+        idx, nscr = place(pab)          # 2nd monitor if present, else full-screen here
         pab.start()
-        rec["pab"] = pab            # keep a ref so it isn't garbage-collected
-        ctx["stat"].setText(f"▶ MI 任务进行中 · {len(seq)} trials · 看提示屏想象 · ESC 中止")
+        rec["pab"] = pab                # keep a ref so it isn't garbage-collected
+        where = f"副屏 {idx}" if nscr > 1 else "全屏(盖住本界面,专心想象)"
+        ctx["stat"].setText(f"▶ MI 任务进行中 · {len(seq)} trials · {mode} · "
+                            f"提示窗在{where} · ESC 中止")
     ctx["ctrls"]["taskbtn"].clicked.connect(launch_task)
 
     # ---- live clean toggles ----

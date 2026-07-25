@@ -43,7 +43,33 @@ def load_npz(path):
     ch = [str(c) for c in z["ch_names"]] if "ch_names" in z else list(CAP32_CHANNELS)
     trigger = z["trigger"].astype(np.int64) if "trigger" in z else np.zeros(data.shape[1], int)
     marker = z["marker"].astype(np.int64) if "marker" in z else None
-    return dict(data=data, fs=fs, ch_names=ch, trigger=trigger, marker=marker)
+    rec = dict(data=data, fs=fs, ch_names=ch, trigger=trigger, marker=marker)
+    # format v2: explicit trial table + metadata written by the paradigm
+    if "trial_onset" in z:
+        rec["trials"] = dict(onset=z["trial_onset"].astype(np.int64),
+                             code=z["trial_code"].astype(np.int64),
+                             name=[str(s) for s in z["trial_name"]],
+                             cue=z["trial_cue_onset"].astype(np.int64)
+                             if "trial_cue_onset" in z else None)
+    if "meta_json" in z:
+        import json
+        try:
+            rec["meta"] = json.loads(str(z["meta_json"]))
+        except Exception:
+            pass
+    return rec
+
+
+def events_from_trials(trials):
+    """Exact events from the paradigm's trial table (preferred over edge detection)."""
+    on = np.asarray(trials["onset"]); code = np.asarray(trials["code"])
+    keep = on >= 0
+    on, code = on[keep], code[keep]
+    events = np.column_stack([on, np.zeros_like(on), code]).astype(int)
+    event_id = {}
+    for c, n in zip(code.tolist(), np.asarray(trials["name"])[keep].tolist()):
+        event_id.setdefault(str(n), int(c))
+    return events, event_id
 
 
 def label_track(rec):
@@ -93,8 +119,11 @@ def read_recording(path):
             return raw, np.empty((0, 3), int), {}
     rec = load_npz(path)
     raw = to_raw(rec)
-    track, _src = label_track(rec)
-    events, event_id = events_from_track(track, rec["fs"])
+    if rec.get("trials") is not None and np.any(np.asarray(rec["trials"]["onset"]) >= 0):
+        events, event_id = events_from_trials(rec["trials"])   # v2: exact, from the paradigm
+    else:
+        track, _src = label_track(rec)
+        events, event_id = events_from_track(track, rec["fs"])
     return raw, events, event_id
 
 
