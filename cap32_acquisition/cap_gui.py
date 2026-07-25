@@ -327,6 +327,19 @@ def save_recording(data, trig, marker, fs, ch_names, outdir="recordings",
                                    acquisition (source, fs, CAR/filter/de-blink state),
                                    link quality (frames received/lost), session notes
     Also writes an MNE `.fif` with imagery onsets as task-labelled annotations."""
+    # NEVER save a subset of channels. A recording session cannot be repeated — the subject,
+    # the cap placement and the electrode contact are all different next time — so every
+    # channel the hardware produced must be preserved, even ones that look dead right now.
+    # (F7 read as a dead rail for four straight sessions and then came back: had we dropped
+    # "useless" channels at save time, that data would be gone for good.) Channel selection
+    # belongs in ANALYSIS, on a copy, never at acquisition.
+    n_ch, n_names = int(data.shape[0]), len(list(ch_names))
+    if n_ch != n_names:
+        raise ValueError(f"channel count mismatch: data has {n_ch}, ch_names has {n_names} "
+                         "— refusing to save a recording with ambiguous channel identity")
+    if n_ch < len(CAP32_CHANNELS):
+        raise ValueError(f"refusing to save only {n_ch} of {len(CAP32_CHANNELS)} channels — "
+                         "acquisition must keep every channel; subset in analysis instead")
     os.makedirs(outdir, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     base = _unique_base(outdir, f"cap32_{stamp}" + (f"_{tag}" if tag else ""))

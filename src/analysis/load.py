@@ -32,7 +32,8 @@ from common.montage import CAP32_CHANNELS                      # noqa: E402
 from common.mi_events import CODE_TO_LABEL                      # noqa: E402
 
 DEFAULT_TMIN, DEFAULT_TMAX = -2.0, 4.0
-DEFAULT_BASELINE = (-1.5, -0.5)      # pre-imagery window used as the ERD/ERS reference
+DEFAULT_BASELINE = (-1.5, -0.5)
+FULLSCALE_UV = (2 ** 23 - 1) * 0.02235175   # ADS1299 ±full scale ≈ 187500 µV
 
 
 # --------------------------------------------------------------------- raw npz
@@ -129,7 +130,8 @@ def read_recording(path):
 
 
 # ------------------------------------------------------- simple artifact steps
-def detect_bad_channels(raw, flat_uv=0.5, noisy_uv=150.0, rail_uv=1.5e5, hf_z=6.0):
+def detect_bad_channels(raw, flat_uv=0.5, noisy_uv=150.0, rail_uv=1.5e5, hf_z=6.0,
+                        min_bad_frac=0.5):
     """Conservative bad-channel flags (no ICA) using ABSOLUTE thresholds so real signal is
     never touched — a channel with more mu/beta is NOT bad. Flags only:
       • flat / dead  (std < flat_uv),
@@ -138,13 +140,22 @@ def detect_bad_channels(raw, flat_uv=0.5, noisy_uv=150.0, rail_uv=1.5e5, hf_z=6.
       • high-frequency junk (sample-to-sample jitter a strong outlier vs the array).
     Returns a list of channel names. Deliberately misses the "slightly noisy posterior"
     case — that is left to ICA/autoreject, which we add separately."""
-    x = raw.get_data() * 1e6                                   # V -> µV
+    # An INTERMITTENT channel must not be condemned for the whole recording: only call it
+    # globally bad when it is bad for at least `min_bad_frac` of the time. Segments where an
+    # otherwise-good channel rails are handled per-epoch instead (see channel_uptime).
+    frac, _ = channel_uptime(raw)
+    # Judge amplitude on a HIGH-PASSED copy: dry electrodes carry huge DC drift, so on
+    # unfiltered data every channel's std exceeds `noisy_uv` and the whole array would be
+    # condemned. This makes the function safe to call on raw or filtered input alike.
+    hp = raw.copy().filter(1.0, None, verbose="ERROR") if raw.info["highpass"] < 0.5 else raw
+    x = hp.get_data() * 1e6                                    # V -> µV
     sd = x.std(axis=1)
     ptp = np.ptp(x, axis=1)
     hf = np.std(np.diff(x, axis=1), axis=1)                    # high-freq content proxy
+    del ptp
     bad = set()
     for i, name in enumerate(raw.ch_names):
-        if sd[i] < flat_uv or ptp[i] > rail_uv or sd[i] > noisy_uv:
+        if frac[i] >= min_bad_frac or sd[i] > noisy_uv:
             bad.add(name)
     # high-freq outlier: broken electrodes jitter far more than the median channel
     keep = np.array([raw.ch_names[i] not in bad for i in range(len(hf))])
@@ -154,6 +165,28 @@ def detect_bad_channels(raw, flat_uv=0.5, noisy_uv=150.0, rail_uv=1.5e5, hf_z=6.
             if name not in bad and (hf[i] - med) / (1.4826 * mad) > hf_z and hf[i] > 40.0:
                 bad.add(name)
     return sorted(bad)
+
+
+def channel_uptime(raw, win_s=1.0, rail_frac=0.5):
+    """Time-RESOLVED channel health: (frac_bad per channel, mask (n_ch, n_win)).
+
+    The cap has at least one INTERMITTENT electrode (F7 sat at +full scale for four whole
+    sessions, yet reads normally in others — a loose connector, not a permanent break).
+    A single whole-recording verdict handles that badly: a channel that is fine for half a
+    session gets interpolated away entirely, and one that rails only briefly may not be
+    flagged at all while its rail artifact still poisons CAR and any epoch it touches.
+    So score every channel per window and let the caller act per segment."""
+    x = raw.get_data() * 1e6
+    fs = raw.info["sfreq"]
+    w = max(1, int(win_s * fs))
+    n = x.shape[1] // w
+    if n == 0:
+        return np.zeros(x.shape[0]), np.zeros((x.shape[0], 0), bool)
+    seg = x[:, :n * w].reshape(x.shape[0], n, w)
+    railed = (np.abs(seg) > 0.97 * FULLSCALE_UV).mean(-1) > rail_frac
+    flat = seg.std(-1) < 0.5
+    bad = railed | flat
+    return bad.mean(1), bad
 
 
 def clean_raw(raw, l_freq=1.0, h_freq=40.0, notch=50.0, car=False,
