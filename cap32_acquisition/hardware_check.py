@@ -49,7 +49,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))                          # src/
 sys.path.insert(0, str(HERE))                                 # src/acquisition/
-from common.montage import CAP32_CHANNELS as CH, ADC_MICROVOLTS_PER_COUNT  # noqa: E402
+from montage import CAP32_CHANNELS as CH, ADC_MICROVOLTS_PER_COUNT  # noqa: E402
 
 NCH = len(CH)
 FULLSCALE_UV = (2 ** 23) * ADC_MICROVOLTS_PER_COUNT           # ≈187.5 mV = ±rail

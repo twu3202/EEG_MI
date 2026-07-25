@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 SCALE = (4.5e6 / (2 ** 23 - 1)) / 24        # µV per ADC count ≈ 0.02235
-RESULTS = Path(__file__).resolve().parents[2] / "results"
+RESULTS = Path(__file__).resolve().parent / "results"
 
 
 def main():
