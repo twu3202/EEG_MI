@@ -351,8 +351,8 @@ def build(fs, source_kind, host, port, note=""):
 
     root = QtWidgets.QWidget()
     root.setStyleSheet(f"background:{BG};color:{TXT};font-family:'Helvetica Neue',Helvetica,Arial;")
-    root.resize(1660, 880)
-    outer = QtWidgets.QVBoxLayout(root); outer.setContentsMargins(12, 10, 12, 10); outer.setSpacing(8)
+    root.resize(1420, 880)
+    outer = QtWidgets.QVBoxLayout(root); outer.setContentsMargins(9, 8, 9, 8); outer.setSpacing(6)
 
     # ---- control bar (card) ----
     barcard, barrow = _card(QtWidgets)
@@ -374,8 +374,8 @@ def build(fs, source_kind, host, port, note=""):
 
     title = QtWidgets.QLabel("Cap32  ·  32-ch ADS1299")
     title.setStyleSheet(f"font-size:17px;font-weight:700;color:{TXT};")
-    src_cb = field(QtWidgets.QComboBox(), 78); src_cb.addItems(["synth", "udp", "tcp"]); src_cb.setCurrentText(source_kind)
-    host_e = field(QtWidgets.QLineEdit(host), 108)
+    src_cb = field(QtWidgets.QComboBox(), 70); src_cb.addItems(["synth", "udp", "tcp"]); src_cb.setCurrentText(source_kind)
+    host_e = field(QtWidgets.QLineEdit(host), 96)
     port_e = field(QtWidgets.QLineEdit(str(port)), 56)
     rate_cb = field(QtWidgets.QComboBox(), 66); rate_cb.addItems(["250", "500", "1000"]); rate_cb.setCurrentText(str(int(fs)))
     low_e = field(QtWidgets.QLineEdit("1"), 38)
@@ -386,7 +386,7 @@ def build(fs, source_kind, host, port, note=""):
 
     # MI paradigm controls — task sets incl. cognitive tasks (减7 / 想词 / 放歌 / 走房间)
     from mi_paradigm import TASK_SETS
-    task_cb = field(QtWidgets.QComboBox(), 240)
+    task_cb = field(QtWidgets.QComboBox(), 172)
     task_cb.addItems(list(TASK_SETS))
     reps_sp = field(QtWidgets.QSpinBox(), 54); reps_sp.setRange(2, 60); reps_sp.setValue(15)
     btn_task = chip("▶ MI Task", "#2f855a")
@@ -398,45 +398,35 @@ def build(fs, source_kind, host, port, note=""):
     def tag(t):
         l = QtWidgets.QLabel(t); l.setStyleSheet(f"color:{SUB};font-size:12px;"); return l
 
-    bar.setSpacing(7)
+    bar.setSpacing(5)
     bar.addWidget(title)
     bar.addStretch(1)
     for lbl, w in [("src", src_cb), ("host", host_e), ("port", port_e), ("Hz", rate_cb)]:
         bar.addWidget(tag(lbl)); bar.addWidget(w)
-    bar.addSpacing(4); bar.addWidget(vsep()); bar.addSpacing(4)
+    bar.addSpacing(3); bar.addWidget(vsep()); bar.addSpacing(3)
     bar.addWidget(tag("band")); bar.addWidget(low_e); bar.addWidget(tag("–")); bar.addWidget(high_e)
     bar.addWidget(notch_cb)
-    bar.addSpacing(4); bar.addWidget(vsep()); bar.addSpacing(4)
+    bar.addSpacing(3); bar.addWidget(vsep()); bar.addSpacing(3)
     bar.addWidget(btn_conn); bar.addWidget(btn_rec)
-    bar.addSpacing(4); bar.addWidget(vsep()); bar.addSpacing(4)
-    bar.addWidget(tag("task")); bar.addWidget(task_cb)
-    bar.addWidget(tag("×")); bar.addWidget(reps_sp); bar.addWidget(btn_task)
 
-    # ---- second row: live clean toggles + view controls ----
-    crow = QtWidgets.QHBoxLayout(); crow.setSpacing(9); barrow.addSpacing(2); barrow.addLayout(crow)
-    clean_lbl = QtWidgets.QLabel("live clean:"); clean_lbl.setStyleSheet(f"color:{SUB};font-weight:600;font-size:12px;")
+    # ---- second row: experiment + live clean + view (keeps row 1 from forcing a wide window)
+    crow = QtWidgets.QHBoxLayout(); crow.setSpacing(6); barrow.addSpacing(2); barrow.addLayout(crow)
+    mode_cb = field(QtWidgets.QComboBox(), 104)
+    mode_cb.addItems(["KMI 动觉", "VMI 视觉"])
+    crow.addWidget(tag("task")); crow.addWidget(task_cb)
+    crow.addWidget(tag("×")); crow.addWidget(reps_sp)
+    crow.addWidget(mode_cb); crow.addWidget(btn_task)
+    crow.addSpacing(8); crow.addWidget(vsep()); crow.addSpacing(8)
+    clean_lbl = QtWidgets.QLabel("clean:"); clean_lbl.setStyleSheet(f"color:{SUB};font-weight:600;font-size:12px;")
     car_cb = QtWidgets.QCheckBox("CAR"); car_cb.setChecked(True); car_cb.setStyleSheet(f"color:{TXT};")
     deblink_cb = QtWidgets.QCheckBox("ICA de-blink"); deblink_cb.setEnabled(False)
     deblink_cb.setStyleSheet(f"color:{SUB};")
-    btn_cal = chip("Calibrate de-blink", "#eef1f5", TXT)
-    crow.addWidget(clean_lbl); crow.addSpacing(2); crow.addWidget(car_cb)
-    crow.addSpacing(10); crow.addWidget(vsep()); crow.addSpacing(10)
-    crow.addWidget(btn_cal); crow.addWidget(deblink_cb)
-    cal_hint = QtWidgets.QLabel("先采≥15s再校准"); cal_hint.setStyleSheet(f"color:{SUB};font-size:11px;")
-    crow.addWidget(cal_hint)
+    btn_cal = chip("Calibrate", "#eef1f5", TXT)
+    crow.addWidget(clean_lbl); crow.addWidget(car_cb); crow.addWidget(btn_cal); crow.addWidget(deblink_cb)
     crow.addStretch(1)
-    # imagery mode: kinesthetic (feel it) vs visual (see it) — big individual difference
-    mode_cb = field(QtWidgets.QComboBox(), 132)
-    mode_cb.addItems(["KMI 动觉(感觉)", "VMI 视觉(看到)"])
-    crow.addWidget(tag("imagery")); crow.addWidget(mode_cb)
-    crow.addSpacing(10); crow.addWidget(vsep()); crow.addSpacing(10)
-    # view controls: vertical scale
-    scale_cb = field(QtWidgets.QComboBox(), 78); scale_cb.addItems([f"±{s} µV" for s in SCALE_UV])
+    scale_cb = field(QtWidgets.QComboBox(), 74); scale_cb.addItems([f"±{s} µV" for s in SCALE_UV])
     scale_cb.setCurrentText("±100 µV")
     crow.addWidget(tag("scale")); crow.addWidget(scale_cb)
-    crow.addSpacing(10); crow.addWidget(vsep()); crow.addSpacing(10)
-    note_lbl = QtWidgets.QLabel("坏道插值 / autoreject / 完整ICA → clean_ui.py 回看")
-    note_lbl.setStyleSheet(f"color:{SUB};font-size:11px;"); crow.addWidget(note_lbl)
     outer.addWidget(barcard)
 
     stat = QtWidgets.QLabel("idle"); stat.setStyleSheet(f"color:{SUB};font-size:11px;padding-left:4px;")
@@ -463,11 +453,11 @@ def build(fs, source_kind, host, port, note=""):
 
     # ---- middle column: live head-map (topomap) + band-power bars (OpenBCI-style) ----
     mid = QtWidgets.QVBoxLayout(); mid.setSpacing(8)
-    mw = QtWidgets.QWidget(); mw.setFixedWidth(300); mw.setLayout(mid)
+    mw = QtWidgets.QWidget(); mw.setFixedWidth(262); mw.setLayout(mid)
 
     hcard, hlay = _card(QtWidgets)
     hhdr = QtWidgets.QHBoxLayout()
-    hhdr.addWidget(_hdr(QtWidgets, "Head map  ·  band power (live)"))
+    hhdr.addWidget(_hdr(QtWidgets, "Head map · band power"))
     head_band = QtWidgets.QComboBox(); head_band.addItems(list(HEAD_BANDS)); head_band.setCurrentText("μ 8–13 Hz")
     head_band.setStyleSheet(f"QComboBox{{background:#f7f9fc;color:{TXT};border:1px solid {LINE};"
                             f"border-radius:5px;padding:2px 6px;font-size:11px;}}"); head_band.setFixedWidth(118)
@@ -491,7 +481,7 @@ def build(fs, source_kind, host, port, note=""):
     mid.addWidget(hcard, 3)
 
     bpcard, bplay = _card(QtWidgets)
-    bplay.addWidget(_hdr(QtWidgets, "Band power  ·  sensorimotor mean (µV)"))
+    bplay.addWidget(_hdr(QtWidgets, "Band power · sensorimotor"))
     bpplot = pg.PlotWidget(); bpplot.setMenuEnabled(False); bpplot.setBackground(CARD)
     bpplot.showGrid(x=False, y=True, alpha=0.15); bpplot.setMinimumHeight(150)
     bpplot.getAxis("bottom").setTicks([[(i, BANDS[i][0]) for i in range(len(BANDS))]])
@@ -506,7 +496,7 @@ def build(fs, source_kind, host, port, note=""):
 
     # ---- right column: spectrum card + quality card ----
     right = QtWidgets.QVBoxLayout(); right.setSpacing(8)
-    rw = QtWidgets.QWidget(); rw.setFixedWidth(372); rw.setLayout(right)
+    rw = QtWidgets.QWidget(); rw.setFixedWidth(330); rw.setLayout(right)
 
     fcard, flay = _card(QtWidgets)
     flay.addWidget(_hdr(QtWidgets, "Spectrum  ·  µV vs Hz  (live, all-ch mean)"))
@@ -530,7 +520,7 @@ def build(fs, source_kind, host, port, note=""):
     right.addWidget(fcard, 3)
 
     qcard, qlay = _card(QtWidgets)
-    qlay.addWidget(_hdr(QtWidgets, "Signal quality  ·  impedance proxy   "
+    qlay.addWidget(_hdr(QtWidgets, "Signal quality   "
                         "<span style='font-weight:400;font-size:11px'>"
                         f"<span style='color:{GOOD}'>●</span> good "
                         f"<span style='color:{WARN}'>●</span> noisy "

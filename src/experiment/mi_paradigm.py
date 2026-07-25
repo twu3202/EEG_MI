@@ -132,14 +132,19 @@ MI_TASKS = {
 # ready-made task sets. Mixed motor+cognitive sets are usually the EASIEST to decode on a
 # dry cap — different networks beat fine left-vs-right spatial resolution.
 TASK_SETS = {
-    "L / R": ["left", "right"],
-    "L / R / Feet": ["left", "right", "feet"],
-    "L / R / Rest": ["left", "right", "rest"],
-    "L / R / 减7": ["left", "right", "math"],
-    "手 / 脚 / 减7 / 放歌": ["hands", "feet", "math", "song"],
-    "认知 4 类 (减7/想词/放歌/走房间)": ["math", "words", "song", "navigate"],
-    "筛选 8 类 (个性化选任务)": ["rest", "left", "right", "feet",
-                                 "math", "words", "song", "navigate"],
+    # Ordered EASIEST → HARDEST for this dry cap, based on the first real 30-trial session:
+    # left-vs-right gave AUC ~0.60 with permutation p=0.41 (i.e. chance), because separating
+    # C3 from C4 needs fine lateral resolution a dry cap does not deliver. Prefer contrasts
+    # that differ in WHICH NETWORK is engaged, not in which hemisphere.
+    "① 双手 / 休息  (先验证有没有信号)": ["hands", "rest"],
+    "② 双手 / 减7   (运动 vs 认知,最易分)": ["hands", "math"],
+    "③ 双手 / 双脚  (手外侧 vs 脚内侧 Cz)": ["hands", "feet"],
+    "④ 减7 / 放歌   (额区 vs 颞区)": ["math", "song"],
+    "⑤ 双手 / 双脚 / 减7  (3 类)": ["hands", "feet", "math"],
+    "⑥ 认知 4 类 (减7/想词/放歌/走房间)": ["math", "words", "song", "navigate"],
+    "⑦ 筛选 8 类 (个性化选任务)": ["rest", "hands", "feet", "left",
+                                    "math", "words", "song", "navigate"],
+    "⑧ 左手 / 右手  (最难,实测≈随机)": ["left", "right"],
 }
 
 # background tint per phase — makes the current state unmistakable, even peripherally
@@ -202,6 +207,7 @@ def _paradigm_class():
             self._i = -1
             self._phase = None
             self._paused = False
+            self._done = False      # guard: `finished` must fire exactly once
             self._light = light
             self._rng = __import__("random").Random(11)
             self._build_ui()
@@ -282,6 +288,9 @@ def _paradigm_class():
 
         def _abort(self):
             self._timer.stop(); self._tick_t.stop()
+            if self._done:                  # already finished normally — closing must NOT
+                self.close(); return        # re-emit, or the recording gets saved twice
+            self._done = True
             self.phase_sig.emit("abort", "", 0)         # clears any live marker
             self.finished.emit()
             self.close()
@@ -315,7 +324,12 @@ def _paradigm_class():
         def _tick(self):
             left = max(0, self._phase_ms - self._clock.elapsed())
             self.phase_bar.setValue(int(1000 * left / self._phase_ms))
-            if self._phase in ("imagery", "cue"):
+            # Countdown ONLY during cue. During IMAGERY the digit would change 4x, and each
+            # change is a visual transient: the first real recording showed occipital 13-30 Hz
+            # +46% (p=0.023) — the ONLY significant effect in the whole dataset — i.e. the
+            # screen was driving visual cortex while sensorimotor showed nothing. Keep the
+            # imagery screen visually STATIC; the thin phase bar is enough feedback.
+            if self._phase == "cue":
                 self.count.setText(f"{left/1000:.0f}")
             else:
                 self.count.setText("")
@@ -410,7 +424,9 @@ def _paradigm_class():
             self.count.setText(""); self.phase_bar.setValue(0)
             self.bar.setValue(len(self.seq))
             self.phase_sig.emit("end", "", 0)
-            self.finished.emit()
+            if not self._done:
+                self._done = True
+                self.finished.emit()
 
     _CLS = MiParadigm
     return _CLS
