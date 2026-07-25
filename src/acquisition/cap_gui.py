@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import socket
 import threading
 import time
 from pathlib import Path
@@ -107,6 +108,10 @@ class Receiver(threading.Thread):
         self.bad = np.zeros(n_ch, bool)  # dead/railed channels — excluded from CAR
         self.deblink = None              # live toggle: a calibrated LiveDeblink operator or None
         self.calib = Ring(n_ch, int(30 * fs))   # rolling buffer for ICA calibration
+        self.stalled = False             # True while the stream is down
+        self.stalls = []                 # [{at_sample, down_s}] — saved into the recording
+
+    STALL_S = 2.0                        # no data for this long => stalled
 
     # ---- recording ----
     MAX_FILL = 2500                      # ≥10 s at 250 Hz; beyond this don't reconstruct
@@ -205,27 +210,50 @@ class Receiver(threading.Thread):
                         else TcpSource(self.host, self.port))
             board_init(self.src, self.fs)   # 'b' start -> rate -> '*' EEG mode (leaves impedance)
             drain(self.src)                 # drop the mode-switch transient before counting loss
+            # WATCHDOG: without a timeout, recvfrom() blocks FOREVER if the board stops
+            # sending (WiFi hiccup / board reset). The thread then hangs silently, the scope
+            # keeps showing the last ring contents — it looks like "the GUI froze" — and any
+            # MI run in progress keeps logging trials at a sample index that never advances.
+            # A real session lost 31 of 50 trials that way. Time out, shout, and recover.
+            self.src.sock.settimeout(self.STALL_S)
             self.report("connected · sent init (b / rate / *) · waiting for frames …")
-            for pkt in self.src.frames():
-                if not self.running:
-                    break
-                parsed = parse_packet(pkt)
-                if parsed is None:
-                    continue
-                sample, seq, trigger = parsed
-                s = sample.reshape(self.n_ch, 1)
-                gap = 0
-                if self._last_seq is not None:
-                    gap = (seq - self._last_seq - 1) % 256
-                    self.lost += gap
-                self._last_seq = seq
-                if gap and self._last_sample is not None:
-                    self._fill_gap(gap, s, trigger)   # keep the time axis honest
-                self._emit(s)
-                self._record(s, trigger)
-                self._last_sample = s
-                if self.n % (int(self.fs) * 2) == 0:
-                    self._stat()
+            last_data = time.time()
+            while self.running:
+                try:
+                    for pkt in self.src.frames():
+                        if not self.running:
+                            break
+                        parsed = parse_packet(pkt)
+                        if parsed is None:
+                            continue
+                        sample, seq, trigger = parsed
+                        s = sample.reshape(self.n_ch, 1)
+                        gap = 0
+                        if self._last_seq is not None:
+                            gap = (seq - self._last_seq - 1) % 256
+                            self.lost += gap
+                        self._last_seq = seq
+                        if gap and self._last_sample is not None:
+                            self._fill_gap(gap, s, trigger)   # keep the time axis honest
+                        self._emit(s)
+                        self._record(s, trigger)
+                        self._last_sample = s
+                        last_data = time.time()
+                        self.stalled = False
+                        if self.n % (int(self.fs) * 2) == 0:
+                            self._stat()
+                    break                                  # generator ended cleanly
+                except socket.timeout:
+                    down = time.time() - last_data
+                    self.stalled = True
+                    self.stalls.append(dict(at_sample=int(self._rec_n), down_s=round(down, 1)))
+                    self.report(f"⚠ 数据中断 {down:.0f}s(第 {len(self.stalls)} 次)— 重发初始化尝试恢复…")
+                    try:
+                        board_init(self.src, self.fs); drain(self.src)
+                    except OSError:
+                        pass
+                    self._last_seq = None          # a restart is not "packet loss"
+                    self._last_sample = None       # and must not be interpolated across
         except Exception as e:
             self.report(f"⚠ {type(e).__name__}: {e}  —  连到帽子的 WiFi 热点(ESPBCI)了吗？")
             self.running = False
@@ -725,8 +753,22 @@ def run_live(fs, source_kind, host, port):
         # ---- trial log: exact sample index of every cue / imagery / rest onset ----
         trials, cur = [], {}
 
+        stall = {"bad": 0, "last": -1}
+
         def on_event(phase, name, code):
             r.set_marker(code)          # 0 except during imagery (the epoching label)
+            if phase == "imagery":
+                # If the stream stalls, rec_len() stops advancing and every later trial gets
+                # logged at the same (meaningless) sample index. A real session silently
+                # produced 31 such trials. Detect it and stop rather than waste the subject's
+                # time doing imagery that is not being recorded.
+                now = r.rec_len()
+                stall["bad"] = stall["bad"] + 1 if (r.stalled or now == stall["last"]) else 0
+                stall["last"] = now
+                if stall["bad"] >= 2:
+                    ctx["stat"].setText("🔴 数据流中断,已中止任务 —— 检查 WiFi/帽子供电后重来")
+                    QtCore.QTimer.singleShot(0, pab._abort)
+                    return
             if phase == "cue":
                 cur.clear()
                 cur.update(trial=len(trials), task=name,
@@ -760,13 +802,14 @@ def run_live(fs, source_kind, host, port):
                                                 for i in np.where(r.bad)[0]]),
                 link=dict(frames_received=int(r.n), frames_lost=int(r.lost),
                           loss_pct=round(100 * r.lost / max(1, r.n + r.lost), 3),
-                          samples_filled=int(r.filled)))
+                          samples_filled=int(r.filled), stalls=list(r.stalls)))
             base = save_recording(data, trig, marker, ctx["fs"], CAP32_CHANNELS,
                                   trials=trials, meta=meta, gap=gap,
                                   tag="-".join(tasks))
+            warn = f" · ⚠ 数据中断 {len(r.stalls)} 次" if r.stalls else ""
             ctx["stat"].setText(
-                f"✅ 完成 · {len(trials)} trials · 丢包 {meta['link']['loss_pct']}% · "
-                f"saved {base}.npz  →  python src/analysis/erd_ers.py {base}.npz")
+                f"{'⚠' if r.stalls else '✅'} 完成 · {len(trials)} trials · "
+                f"丢包 {meta['link']['loss_pct']}%{warn} · saved {base}.npz")
 
         pab = MiParadigm(seq, timing, on_event=on_event, send_trigger=r.send,
                          light=True, mode=mode)
