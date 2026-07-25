@@ -18,6 +18,13 @@ filter) and produces a plot + a printed verdict.
                much of that tone leaks into the OTHER channels. Good design < 1 % (−40 dB).
                Plot: per-channel leakage (dB) relative to the source channel.
 
+    watch      LIVE per-channel state, refreshed continuously. For localising an
+               INTERMITTENT fault: start it, then wiggle the electrode, the lead, and the
+               connector in turn and see exactly which one makes the channel flip. Also the
+               readout for the swap test (move the suspect lead to a known-good input: if
+               the fault follows the lead the lead is bad, if it stays on the input the
+               board/connector is bad).
+
     mains      50 Hz MAINS PICKUP (CMRR proxy). Setup: normal wear.
                How much 50 Hz each channel picks up — a practical proxy for interference
                rejection. (True CMRR needs a tied-input common-mode source; noted below.)
@@ -42,13 +49,15 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))                          # src/
 sys.path.insert(0, str(HERE))                                 # src/acquisition/
-from montage import CAP32_CHANNELS as CH, ADC_MICROVOLTS_PER_COUNT  # noqa: E402
+from common.montage import CAP32_CHANNELS as CH, ADC_MICROVOLTS_PER_COUNT  # noqa: E402
 
 NCH = len(CH)
 FULLSCALE_UV = (2 ** 23) * ADC_MICROVOLTS_PER_COUNT           # ≈187.5 mV = ±rail
 RESULTS = HERE / "results"
 
 SETUP = {
+    "watch": "接上帽子即可。开始后依次轻拨:电极 → 靠近电极的导线 → 导线中段 → 板子接插件,"
+             "看哪一步会让通道状态跳变。",
     "noise": "把所有电极短接在一起(或接到 REF/地),最好用锡纸包住。测放大器本底噪声。",
     "dc": "正常戴在头上。测各通道直流偏置和顶轨(rail)频率。",
     "crosstalk": "只在一个电极上加一个干净的正弦(信号发生器/手机播放音调经导线接入),其余不动。",
@@ -219,6 +228,49 @@ def _save(fig, out):
     print("saved", out)
 
 
+# ----------------------------------------------------------------- live watch
+def watch_live(host, port, fs, channels, win_s=1.0):
+    """Continuous per-channel state — for tracking down an intermittent connection."""
+    from udp_lsl_bridge import UdpSource, parse_packet, board_init, drain, EEG_MODE
+    idx = [(c, CH.index(c)) for c in channels if c in CH]
+    src = UdpSource(host, port); board_init(src, fs); time.sleep(1.0); drain(src)
+    src.sock.settimeout(2.0)
+    buf, w = [], int(win_s * fs)
+    print("\n盯着这些通道,边摇边看 (Ctrl-C 停止):", [c for c, _ in idx])
+    print(f"{'':10s}" + "".join(f"{c:>14}" for c, _ in idx))
+    flips = {c: 0 for c, _ in idx}; last = {c: None for c, _ in idx}
+    t0 = time.time()
+    try:
+        for pkt in src.frames():
+            p = parse_packet(pkt)
+            if p is not None:
+                buf.append(p[0])
+            if len(buf) >= w:
+                X = np.array(buf[-w:], float).T; buf = buf[-w:]
+                cells = []
+                for c, i in idx:
+                    v = X[i]
+                    rail = np.mean(np.abs(v) > 0.97 * FULLSCALE_UV) > 0.5
+                    state = "RAIL" if rail else ("flat" if v.std() < 1 else "OK")
+                    if last[c] is not None and state != last[c]:
+                        flips[c] += 1
+                    last[c] = state
+                    col = "\033[31m" if state == "RAIL" else ("\033[33m" if state == "flat" else "\033[32m")
+                    cells.append(f"{col}{state:>6}{RESET}{v.std():6.0f}µV")
+                print(f"[{time.time()-t0:6.1f}s]" + "".join(cells) +
+                      ("   跳变: " + " ".join(f"{c}×{n}" for c, n in flips.items() if n) if any(flips.values()) else ""))
+                buf = []
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            src.send(EEG_MODE)
+        except OSError:
+            pass
+    print("\n各通道状态跳变次数:", {c: n for c, n in flips.items()})
+    print("→ 摇到哪一段时跳变最多,断点就在那一段")
+
+
 # ----------------------------------------------------------------- demo data
 def demo_data(fs, seconds, test):
     n = int(seconds * fs); t = np.arange(n) / fs; rng = np.random.default_rng(1)
@@ -246,7 +298,10 @@ def demo_data(fs, seconds, test):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--test", required=True, choices=["noise", "dc", "crosstalk", "mains"])
+    ap.add_argument("--test", required=True,
+                    choices=["noise", "dc", "crosstalk", "mains", "watch"])
+    ap.add_argument("--channels", nargs="+", default=["F7", "F8", "F3", "C3"],
+                    help="watch 模式:要盯的通道")
     ap.add_argument("--host", default="192.168.4.1"); ap.add_argument("--port", type=int, default=8086)
     ap.add_argument("--sfreq", type=int, default=250); ap.add_argument("--seconds", type=float, default=15)
     ap.add_argument("--source-ch", default=None); ap.add_argument("--probe-hz", type=float, default=None)
@@ -255,6 +310,9 @@ def main():
     args = ap.parse_args()
     out = args.out or str(RESULTS / f"hw_{args.test}.png")
 
+    if args.test == "watch":
+        watch_live(args.host, args.port, args.sfreq, args.channels)
+        return
     if args.demo:
         x = demo_data(args.sfreq, args.seconds, args.test)
     else:
