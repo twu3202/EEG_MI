@@ -88,6 +88,46 @@ def ping_ok(host, n=1, timeout=2):
                           shell=True, capture_output=True).returncode == 0
 
 
+def wifi_takes_dhcp_router():
+    """Is the Wi-Fi service on DHCP? Then joining ESPBCI installs 192.168.4.1 as a
+    competing DEFAULT GATEWAY — which is what makes Clash/mihomo bind its outbound
+    connections to the cap's dead-end Wi-Fi and stop working."""
+    txt = sh('networksetup -getinfo "Wi-Fi"')
+    return "DHCP Configuration" in txt, txt
+
+
+def system_proxy():
+    """(host, port, services_with_proxy) from macOS per-service proxy settings."""
+    host = port = None
+    svcs = []
+    for svc, _dev, _ip in interfaces() or []:
+        t = sh(f'networksetup -getwebproxy "{svc}"')
+        if "Enabled: Yes" in t:
+            svcs.append(svc)
+            for ln in t.splitlines():
+                if ln.startswith("Server:"):
+                    host = ln.split(":", 1)[1].strip()
+                if ln.startswith("Port:"):
+                    port = int(ln.split(":", 1)[1].strip() or 0)
+    return host, port, svcs
+
+
+def proxy_tunnel_ok(phost, pport, target="www.cloudflare.com", tport=443, timeout=4.0):
+    """Ask the proxy to CONNECT somewhere — proves the proxy's OUTBOUND path works."""
+    try:
+        s = socket.create_connection((phost, pport), timeout=timeout)
+    except OSError:
+        return None                                    # proxy not even listening
+    try:
+        s.sendall(f"CONNECT {target}:{tport} HTTP/1.1\r\n"
+                  f"Host: {target}:{tport}\r\n\r\n".encode())
+        return b" 200 " in s.recv(256)
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 def udp_port_free(port):
     """Is our data port already taken (e.g. the vendor main_ui is running)?"""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -142,6 +182,21 @@ def check(verbose=True):
         row(port_free, f"UDP {LOCAL_PORT} 空闲", "→ 关掉厂商 main_ui.exe 或其它占用的程序", warn=True)
         if on_cap_subnet and cap_dev and dev and cap_dev == dev and not net_ok:
             print(f"  {Y}!{X} 默认路由被帽子抢走了 —— 这就是断网的原因")
+
+        # ---- proxy (Clash/mihomo) ----
+        phost, pport, psvcs = system_proxy()
+        if phost:
+            tunnel = proxy_tunnel_ok(phost, pport)
+            print(f"\n{B}代理 proxy{X}  ({phost}:{pport}, 已设于 {len(psvcs)} 个服务)")
+            row(tunnel is not None, "代理端口在监听", "→ Clash 没运行?")
+            row(bool(tunnel), "通过代理能出网 (CONNECT)",
+                "→ 代理的出站走错网卡了(多半被 ESPBCI 抢走)")
+            dhcp, _ = wifi_takes_dhcp_router()
+            row(not dhcp, "Wi-Fi 不会抢默认网关",
+                "→ Wi-Fi 是 DHCP:连 ESPBCI 会拿到网关 192.168.4.1,"
+                "Clash 出站可能被绑到这个死路上", warn=True)
+            if on_cap_subnet and tunnel is False:
+                print(f"  {Y}!{X} 这就是「能上网但代理失效」的典型表现")
 
         both = cap_ping and net_ok
         print(f"\n{B}结论{X}: " + (f"{G}✅ 帽子 + 互联网 同时在线,可以一边采集一边联网{X}" if both
