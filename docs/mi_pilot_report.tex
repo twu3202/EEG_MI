@@ -19,7 +19,7 @@
 
 \title{\bfseries 32 导干电极脑电帽\\运动想象(MI)初期测试报告}
 \author{EEG\_MI 项目}
-\date{2026 年 7 月 25 日}
+\date{2026 年 7 月 27 日}
 
 \begin{document}
 \maketitle
@@ -30,8 +30,8 @@
 0.000\%,时序精度 8.96\,s/trial,全通道无损保存);\textbf{左右手想象不可分}(置换检验
 $p=0.41$);\textbf{"做任务 vs 休息"可分}(多种方法稳定在 0.83–0.87);\textbf{手 vs 脚在 mu 频段
 可分}($\mathrm{AUC}=0.704$, $p=0.040$)——但后者需要\textbf{剔除无效通道并选对频段}才能显现,
-用默认全通道流水线会被淹没。冻结的 foundation model embedding 全面\textbf{劣于}经典
-Riemannian/带功率方法。报告同时记录一个不可忽视的混淆:受试无 MI 经验,主观上\textbf{"抑制真实
+用默认全通道流水线会被淹没。横向测评 \textbf{7 个} EEG foundation model(含新接入的 EEGPT/BENDR/BIOT/SignalJEPA),
+冻结表征\textbf{全部劣于}经典 Riemannian/带功率方法,且模型规模不预测表现。报告同时记录一个不可忽视的混淆:受试无 MI 经验,主观上\textbf{"抑制真实
 动作"的心理活动强于运动想象本身},本数据无法区分二者。
 \end{abstract}
 
@@ -60,7 +60,7 @@ Riemannian/带功率方法。报告同时记录一个不可忽视的混淆:受�
 
 \section{方法}
 每份录制都做了\textbf{广度搜索}而非单一流水线:4 种通道集 $\times$ 5 个频段 $\times$ 6 种特征/分类器
-= 115 个组合,外加两个冻结 foundation model 的 embedding 线性探针。评估用 5 折 $\times$ 多次重复
+= 115 个组合,外加 \textbf{7 个}冻结 foundation model 的 embedding 线性探针。评估用 5 折 $\times$ 多次重复
 分层交叉验证;\textbf{最终结论只采信置换检验}。个体 mu 峰实测在 \textbf{7.0\,Hz}(低于教科书的
 10–12\,Hz),故频段扫描包含 6–9\,Hz。
 
@@ -110,21 +110,58 @@ $\approx$1.6),即\textbf{用默认全通道流水线看,三个任务的空间模
 \textbf{手 vs 脚在 mu 频段确实可分},且符合躯体定位学(手在外侧 C3/C4、脚在内侧 Cz)。这修正了
 "三个任务无差异"的早期结论——差异存在,只是被无效通道和错误频段淹没了。\textbf{通道选择是关键}。
 
-\subsection{Foundation model embedding:劣于经典方法}
+\subsection{Foundation model:七个预训练模型的横向测评}
+共测试 \textbf{7 个} EEG foundation model 的\textbf{冻结}表征 + 线性探针。五个来自 braindecode 1.6
+的官方 HuggingFace 权重(本次新增,含此前一直无法获取的 \textbf{EEGPT}),两个是项目里已有的本地权重。
+
+\paragraph{接入方法。}每个 checkpoint 的预训练 montage 与采样率都不同,32 导干电极帽无法直接喂入:
+\begin{itemize}
+\item \textbf{通道}:checkpoint 自带具名 montage 的(EEGPT 62 导、LaBraM 128 导、SignalJEPA 62 导、
+      BENDR 20 导),按\textbf{导联名}把我们的电极放进对应位置,\textbf{其余置零}——不做插值、不伪造信号;
+      只固定通道\emph{数}的(BIOT 18 导)走 braindecode 的 \cmd{Interpolated*} 样条插值。
+      BENDR 的固定表用旧命名 T5/T6,已映射到我们的 P7/P8。
+\item \textbf{采样率/长度}:重采样到 checkpoint 的 sfreq 并裁剪/补齐到其 n\_times。
+\item 分类头替换为 Identity,取\textbf{倒数第二层}表征;高维 embedding 先 PCA 降到 $\le n/3$ 维,
+      避免 $n \ll d$ 时线性探针靠记忆刷分。
+\end{itemize}
+
 \begin{center}\small
-\begin{tabular}{@{}lcc@{}}
+\begin{tabular}{@{}lrrcc@{}}
 \toprule
-& 双手/休息(随机 0.5) & 三分类(随机 0.333) \\
+模型 & 参数 & embedding 维 & 双手/休息(随机 .500) & 三分类(随机 .333) \\
 \midrule
-经典最好(Riemannian / 带功率) & \textbf{0.867} & \textbf{0.480} \\
-CBraMod(冻结)+ 线性探针 & 0.700 & 0.298 \\
-LaBraM(冻结)+ 线性探针 & 0.589 & 0.262 \\
+\textbf{[经典] TS+LR mu} & — & — & \textbf{0.790} $\pm$.19 & 0.365 $\pm$.10 \\
+\midrule
+BENDR        & 157.1\,M & 512    & \underline{0.733} $\pm$.22 & \textbf{0.392} $\pm$.10 \\
+BIOT         & 3.2\,M   & 256    & 0.703 $\pm$.20 & 0.253 $\pm$.07 \\
+EEGPT        & 25.3\,M  & 63\,488 & 0.673 $\pm$.19 & \underline{0.373} $\pm$.10 \\
+CBraMod(本地) & 4.0\,M  & 6\,200 & 0.700 $\pm$.18 & 0.298 $\pm$.11 \\
+SignalJEPA   & 3.5\,M   & 27\,776 & 0.597 $\pm$.21 & 0.336 $\pm$.09 \\
+LaBraM(本地) & 5.8\,M   & 6\,200 & 0.589 $\pm$.27 & 0.262 $\pm$.09 \\
+LaBraM(官方) & 5.8\,M   & 200    & 0.503 $\pm$.21 & 0.309 $\pm$.10 \\
 \bottomrule
 \end{tabular}
 \end{center}
-与我们在公开数据(BCI IV-2a)上的结论一致:\textbf{冻结的通用 backbone 不能线性暴露 MI 所需的
-细微空间对比},需要微调才有竞争力。embedding 空间的直接可视化(图~\ref{fig:emb})也显示三分类
-在任何特征空间里都没有可见聚类。
+
+\paragraph{结论。}
+\begin{enumerate}
+\item \textbf{没有任何冻结 FM 超过经典流水线}。在信号确实存在的双手/休息上,经典 TS+LR 取得 0.790,
+      最好的 FM(BENDR)只有 0.733;在三分类上所有方法都贴着随机线,名义最好的 BENDR 0.392 其
+      标准差就有 0.099。
+\item \textbf{模型规模不预测表现}。BENDR 有 157\,M 参数(比 BIOT 大 49 倍),优势却只有 3 个百分点;
+      3.2\,M 的 BIOT 在双手/休息上反超 25.3\,M 的 EEGPT。
+\item \textbf{官方 LaBraM 权重在二分类上恰好等于随机}(0.503)。同一架构的本地权重是 0.589——
+      说明差异来自预训练数据/权重版本,而非架构。
+\item 这与我们在公开数据 BCI IV-2a 上的结论完全一致:\textbf{冻结的通用 backbone 无法线性暴露 MI
+      所需的细微空间对比},要有竞争力必须微调。
+\end{enumerate}
+
+\paragraph{一个必须说明的技术细节。}EEGPT 的 \cmd{chan\_proj\_type} 默认会\textbf{强制把任意输入投影到
+它自己的 19 导标准集}并忽略传入的 montage,导致 62 导 checkpoint 加载失败;必须显式指定
+\cmd{chan\_proj\_type="none"}。这类"默认参数与 checkpoint 不匹配"的坑在跨模型比较里很容易造成
+"某模型不行"的错误结论——本次五个模型里有三个需要各自的加载修正才跑得起来。
+
+embedding 空间的直接可视化(图~\ref{fig:emb})也印证了数值:三分类在任何特征空间里都没有可见聚类。
 
 \begin{figure}[h]\centering\includegraphics[width=\linewidth]{embedding_explore.png}
 \caption{切空间 PCA、交叉验证 LDA 投影(无泄漏)、CBraMod embedding PCA。上排 hands/rest 可见
