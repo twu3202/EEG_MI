@@ -179,6 +179,28 @@ SignalJEPA & \textcolor{bad}{0.000} & 16.2 & \textcolor{bad}{接近常数}——
 取得高分,也只是 19 个样本上的噪声拟合。真正"表征健康且分数可信"的只有 EEGPT 与 BIOT,
 而它们\textbf{仍然低于经典方法}。
 
+\paragraph{固化为前置门槛。}上述四项指标已做成 \cmd{src/foundation/embed\_health.py},
+接入任何新模型时\textbf{先过这一关再看准确率}:
+
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+指标 & FAIL & WARN & 抓什么 \\
+\midrule
+补零占比      & $>5\%$    & $>1\%$    & 窗口/采样率没对齐,探针读的是填充 \\
+通道覆盖      & $<30\%$   & $<60\%$   & montage 映射失败,大半电极没进模型 \\
+变异比        & $<0.05$   & $<0.20$   & 表征近乎常数,不含 trial 信息 \\
+有效秩        & $<3$      & $<6$      & 表征塌缩到极少数方向 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent 对本数据集的判定:EEGPT \textcolor{good}{PASS}、LaBraM \textcolor{good}{PASS}、
+BIOT \textcolor{warn}{WARN}(有效秩 5.7)、SignalJEPA \textcolor{bad}{FAIL}(变异比 0.000)、
+BENDR \textcolor{bad}{FAIL}(变异比 0.021、有效秩 1.6、覆盖 58\%)。
+\textbf{FAIL 的模型其准确率不应解读}。阈值是在本帽子与本样本量上的启发式,作参考门槛用,
+不是对模型本身的定论。
+
 \paragraph{结论(修复后仍然成立)。}
 \begin{enumerate}
 \item \textbf{没有任何冻结 FM 超过经典流水线}(0.790)。这一条在修复前后都成立,且修复后更干净。
