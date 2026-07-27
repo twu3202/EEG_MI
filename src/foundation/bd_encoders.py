@@ -30,13 +30,18 @@ ROOT = Path(__file__).resolve().parents[2]
 HF_HOME = ROOT / "checkpoints" / "hf"
 
 # name -> (hf repo, braindecode class, interpolated class or None, n_times, sfreq)
+# name -> (repo, class, interpolated class, sfreq, patch size or None)
+# n_times is NOT fixed here: it is computed from the actual analysis window so the model
+# never sees zero padding. Feeding a 3 s trial into a checkpoint's native 15 s input made
+# 80 % of LaBraM's input zeros and drove the trial-to-trial embedding correlation to 0.99
+# — the probe was reading the padding, not the EEG.
 SPECS = {
-    "EEGPT":      ("braindecode/eegpt-pretrained", "EEGPT", None, 1000, 250.0),
-    "LaBraM-bd":  ("braindecode/labram-pretrained", "Labram", None, 3000, 200.0),
-    "SignalJEPA": ("braindecode/signal-jepa", "SignalJEPA", None, 1000, 128.0),
+    "EEGPT":      ("braindecode/eegpt-pretrained", "EEGPT", None, 250.0, None),
+    "LaBraM-bd":  ("braindecode/labram-pretrained", "Labram", None, 200.0, 200),
+    "SignalJEPA": ("braindecode/signal-jepa", "SignalJEPA", None, 128.0, None),
     "BIOT":       ("braindecode/biot-pretrained-six-datasets-18chs", "BIOT",
-                   "InterpolatedBIOT", 1000, 200.0),
-    "BENDR":      ("braindecode/braindecode-bendr", "BENDR", "InterpolatedBENDR", 1000, 250.0),
+                   "InterpolatedBIOT", 200.0, None),
+    "BENDR":      ("braindecode/braindecode-bendr", "BENDR", "InterpolatedBENDR", 250.0, None),
 }
 
 
@@ -62,11 +67,15 @@ def _ckpt_channels(repo):
 class BDEncoder:
     """Load one pretrained braindecode model and expose frozen embeddings."""
 
-    def __init__(self, name, our_channels, device=None):
+    def __init__(self, name, our_channels, window_s=3.0, device=None):
         import torch, mne, braindecode.models as M
         _set_hf_home()
         mne.set_log_level("CRITICAL")
-        repo, cls_name, interp_name, n_times, sfreq = SPECS[name]
+        repo, cls_name, interp_name, sfreq, patch = SPECS[name]
+        n_times = int(round(window_s * sfreq))
+        if patch:                                   # patch models need whole patches
+            n_times = max(patch, (n_times // patch) * patch)
+        self.window_s, self.patch = window_s, patch
         self.name, self.repo = name, repo
         self.n_times, self.sfreq = n_times, sfreq
         self.our = [c.upper() for c in our_channels]
@@ -95,6 +104,21 @@ class BDEncoder:
                                 n_outputs=2, chan_proj_type="none")
                 sd = load_file(_g.glob(str(HF_HOME / "hub" /
                     f"models--{repo.replace('/', '--')}" / "snapshots/*/model.safetensors"))[0])
+                missing, unexpected = model.load_state_dict(sd, strict=False)
+                self.load_note = f"missing={len(missing)} unexpected={len(unexpected)}"
+            elif cls_name == "Labram":
+                # temporal_embedding is (1, 16, 200) = 16 one-second patches. Build for the
+                # patches we actually have and copy the leading rows, instead of padding the
+                # input out to the checkpoint's 15 s.
+                import glob as _g
+                from safetensors.torch import load_file
+                model = M.Labram(chs_info=info["chs"], n_times=n_times, sfreq=sfreq, n_outputs=2)
+                sd = load_file(_g.glob(str(HF_HOME / "hub" /
+                    f"models--{repo.replace('/', '--')}" / "snapshots/*/model.safetensors"))[0])
+                te = sd.get("temporal_embedding")
+                if te is not None and hasattr(model, "temporal_embedding"):
+                    want = model.temporal_embedding.shape[1]
+                    sd["temporal_embedding"] = te[:, :want] if te.shape[1] >= want else te
                 missing, unexpected = model.load_state_dict(sd, strict=False)
                 self.load_note = f"missing={len(missing)} unexpected={len(unexpected)}"
             else:
@@ -136,7 +160,10 @@ class BDEncoder:
         e = e.resample(self.sfreq).crop(*tw)
         X = e.get_data(copy=False) * 1e6                       # µV
         n = self.n_times
-        X = X[..., :n] if X.shape[-1] >= n else np.pad(X, ((0, 0), (0, 0), (0, n - X.shape[-1])))
+        if X.shape[-1] < n:
+            raise ValueError(f"{self.name}: window gives {X.shape[-1]} samples but the model "
+                             f"was built for {n}; widen window_s rather than zero-padding")
+        X = X[..., :n]                              # exact length, NO padding
         if self.mode == "interpolated":
             return X.astype(np.float32)
         Y = np.zeros((X.shape[0], len(self.target), n), np.float32)   # unmatched stay 0
@@ -150,6 +177,8 @@ class BDEncoder:
         return Y
 
     def encode(self, ep, chans, tw=(0.5, 3.5), batch=16, scale=0.01):
+        assert abs((tw[1] - tw[0]) - self.window_s) < 0.26, \
+            f"encode window {tw} != construction window_s={self.window_s}"
         import torch
         X = self._prepare(ep, chans, tw) * scale               # models expect µV/100
         out = []
@@ -164,11 +193,11 @@ class BDEncoder:
         return len(self.idx) if self.idx is not None else "interp"
 
 
-def load_all(our_channels, only=None):
+def load_all(our_channels, only=None, window_s=3.0):
     ok, fail = {}, {}
     for name in (only or SPECS):
         try:
-            ok[name] = BDEncoder(name, our_channels)
+            ok[name] = BDEncoder(name, our_channels, window_s=window_s)
         except Exception as e:
             fail[name] = f"{type(e).__name__}: {str(e)[:80]}"
     return ok, fail

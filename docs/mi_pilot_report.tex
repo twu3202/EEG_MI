@@ -31,7 +31,8 @@
 $p=0.41$);\textbf{"做任务 vs 休息"可分}(多种方法稳定在 0.83–0.87);\textbf{手 vs 脚在 mu 频段
 可分}($\mathrm{AUC}=0.704$, $p=0.040$)——但后者需要\textbf{剔除无效通道并选对频段}才能显现,
 用默认全通道流水线会被淹没。横向测评 \textbf{7 个} EEG foundation model(含新接入的 EEGPT/BENDR/BIOT/SignalJEPA),
-冻结表征\textbf{全部劣于}经典 Riemannian/带功率方法,且模型规模不预测表现。报告同时记录一个不可忽视的混淆:受试无 MI 经验,主观上\textbf{"抑制真实
+冻结表征\textbf{全部劣于}经典 Riemannian/带功率方法;过程中发现\textbf{零填充会彻底毁掉跨模型比较}
+(BENDR 因此虚高到 0.733,修复后仅 0.303),故一并给出表征健康度诊断。报告同时记录一个不可忽视的混淆:受试无 MI 经验,主观上\textbf{"抑制真实
 动作"的心理活动强于运动想象本身},本数据无法区分二者。
 \end{abstract}
 
@@ -126,40 +127,69 @@ $\approx$1.6),即\textbf{用默认全通道流水线看,三个任务的空间模
 \end{itemize}
 
 \begin{center}\small
-\begin{tabular}{@{}lrrcc@{}}
+\begin{tabular}{@{}lrrcccc@{}}
 \toprule
-模型 & 参数 & embedding 维 & 双手/休息(随机 .500) & 三分类(随机 .333) \\
+& & & \multicolumn{2}{c}{双手/休息(随机 .500)} & 三分类 & 表征 \\
+\cmidrule(lr){4-5}
+模型 & 参数 & dim & 修复前 & \textbf{修复后} & (随机 .333) & 变异比 \\
 \midrule
-\textbf{[经典] TS+LR mu} & — & — & \textbf{0.790} $\pm$.19 & 0.365 $\pm$.10 \\
+\textbf{[经典] TS+LR mu} & — & — & 0.790 & \textbf{0.790} & 0.365 & — \\
 \midrule
-BENDR        & 157.1\,M & 512    & \underline{0.733} $\pm$.22 & \textbf{0.392} $\pm$.10 \\
-BIOT         & 3.2\,M   & 256    & 0.703 $\pm$.20 & 0.253 $\pm$.07 \\
-EEGPT        & 25.3\,M  & 63\,488 & 0.673 $\pm$.19 & \underline{0.373} $\pm$.10 \\
-CBraMod(本地) & 4.0\,M  & 6\,200 & 0.700 $\pm$.18 & 0.298 $\pm$.11 \\
-SignalJEPA   & 3.5\,M   & 27\,776 & 0.597 $\pm$.21 & 0.336 $\pm$.09 \\
-LaBraM(本地) & 5.8\,M   & 6\,200 & 0.589 $\pm$.27 & 0.262 $\pm$.09 \\
-LaBraM(官方) & 5.8\,M   & 200    & 0.503 $\pm$.21 & 0.309 $\pm$.10 \\
+SignalJEPA   & 3.5\,M   & 7\,936  & 0.597 & 0.720 & 0.349 & \textcolor{bad}{0.000} \\
+BIOT         & 3.2\,M   & 256     & 0.703 & 0.700 & \underline{0.360} & 0.419 \\
+EEGPT        & 25.3\,M  & 47\,104 & 0.673 & 0.643 & 0.344 & \textbf{0.667} \\
+LaBraM(官方) & 5.8\,M   & 200     & \textcolor{bad}{0.503} & 0.583 & 0.312 & 0.219 \\
+BENDR        & 157.1\,M & 512     & \textcolor{bad}{0.733} & \textcolor{bad}{0.303} & 0.285 & \textcolor{bad}{0.021} \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\paragraph{结论。}
-\begin{enumerate}
-\item \textbf{没有任何冻结 FM 超过经典流水线}。在信号确实存在的双手/休息上,经典 TS+LR 取得 0.790,
-      最好的 FM(BENDR)只有 0.733;在三分类上所有方法都贴着随机线,名义最好的 BENDR 0.392 其
-      标准差就有 0.099。
-\item \textbf{模型规模不预测表现}。BENDR 有 157\,M 参数(比 BIOT 大 49 倍),优势却只有 3 个百分点;
-      3.2\,M 的 BIOT 在双手/休息上反超 25.3\,M 的 EEGPT。
-\item \textbf{官方 LaBraM 权重在二分类上恰好等于随机}(0.503)。同一架构的本地权重是 0.589——
-      说明差异来自预训练数据/权重版本,而非架构。
-\item 这与我们在公开数据 BCI IV-2a 上的结论完全一致:\textbf{冻结的通用 backbone 无法线性暴露 MI
-      所需的细微空间对比},要有竞争力必须微调。
-\end{enumerate}
+\begin{mdframed}[linecolor=bad,backgroundcolor=bad!5]
+\textbf{一次必要的自我更正——零填充毁掉了第一版对比。}每个 checkpoint 的原生输入长度不同
+(LaBraM 15\,s、SignalJEPA 7.8\,s、BIOT 5\,s、EEGPT/BENDR 4\,s),而我们的想象窗只有 3\,s。
+第一版把不足的部分\textbf{补零},于是模型看到的输入有 \textbf{25\%--80\% 是零}:
+LaBraM 的输入 80\% 为零,表征被恒定的填充主导(trial 间变异只占幅度的 22\%),
+线性探针读到的主要是填充而非脑电——这就是 \textbf{0.503(恰好随机)} 的来源。
 
-\paragraph{一个必须说明的技术细节。}EEGPT 的 \cmd{chan\_proj\_type} 默认会\textbf{强制把任意输入投影到
-它自己的 19 导标准集}并忽略传入的 montage,导致 62 导 checkpoint 加载失败;必须显式指定
-\cmd{chan\_proj\_type="none"}。这类"默认参数与 checkpoint 不匹配"的坑在跨模型比较里很容易造成
-"某模型不行"的错误结论——本次五个模型里有三个需要各自的加载修正才跑得起来。
+修复方式是\textbf{按实际窗口构造模型}(SignalJEPA/EEGPT/BENDR 的 checkpoint 没有长度相关参数,
+n\_times 本可自由设定;LaBraM 的 \cmd{temporal\_embedding} 是 $(1,16,200)$,切到前 3 个 patch 即可),
+\textbf{完全不补零}。结果:LaBraM $0.503\to0.583$,而 \textbf{BENDR 从"最好的 FM" $0.733$ 跌到 $0.303$}
+——它此前的高分完全是填充产生的假象。\textbf{第一版 FM 之间的排名基本是噪声。}
+\end{mdframed}
+
+\paragraph{表征健康度诊断。}"trial 间相关"这个直觉指标\textbf{不可用}:原始 embedding 的相关会被所有
+trial 共有的\textbf{常数偏置}主导(五个模型里有两个原始相关 $=1.0000$)。去均值后改看两个量——
+\textbf{变异比}(trial 间变异 / 表征幅度)与\textbf{有效秩}:
+
+\begin{center}\small
+\begin{tabular}{@{}lccl@{}}
+\toprule
+模型 & 变异比 & 有效秩(最大 18) & 判读 \\
+\midrule
+EEGPT      & 0.667 & 17.5 & \textcolor{good}{健康}——表征随 trial 充分变化 \\
+BIOT       & 0.419 & 5.7  & 中等 \\
+LaBraM     & 0.219 & 6.8  & 偏低(修复后) \\
+BENDR      & \textcolor{bad}{0.021} & \textcolor{bad}{1.6} & \textcolor{bad}{接近退化}：512 维实际只张成 $\approx$1.6 维 \\
+SignalJEPA & \textcolor{bad}{0.000} & 16.2 & \textcolor{bad}{接近常数}——几乎不含 trial 信息 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{因此 SignalJEPA 的 0.720 与 BENDR 的分数都不可信}:一个近乎常数的表征即使偶然
+取得高分,也只是 19 个样本上的噪声拟合。真正"表征健康且分数可信"的只有 EEGPT 与 BIOT,
+而它们\textbf{仍然低于经典方法}。
+
+\paragraph{结论(修复后仍然成立)。}
+\begin{enumerate}
+\item \textbf{没有任何冻结 FM 超过经典流水线}(0.790)。这一条在修复前后都成立,且修复后更干净。
+\item \textbf{模型规模不预测表现}:157\,M 的 BENDR 表征接近退化,3.2\,M 的 BIOT 反而最稳。
+\item \textbf{跨模型比较极易被输入适配的细节污染}。五个模型里三个需要各自的加载修正才跑得起来
+      (EEGPT 的 \cmd{chan\_proj\_type} 默认强制 19 导投影;LaBraM 需匹配 temporal embedding;
+      BENDR 用 1991 年前的 T5/T6 命名),而且它们\textbf{都是静默失败},不报错、只是形状对不上或
+      悄悄降级。一旦叠加零填充,得到的排名就是纯噪声。
+\item 与公开数据 BCI IV-2a 的结论一致:\textbf{冻结的通用 backbone 无法线性暴露 MI 所需的细微
+      空间对比},要有竞争力必须微调。
+\end{enumerate}
 
 embedding 空间的直接可视化(图~\ref{fig:emb})也印证了数值:三分类在任何特征空间里都没有可见聚类。
 
