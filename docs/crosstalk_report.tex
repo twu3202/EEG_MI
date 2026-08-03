@@ -271,6 +271,48 @@ opposite of what ribbon lead-to-lead capacitance would produce. FP1 at $\Delta\t
 reads more than PO4 at $\Delta\text{pin}=3$. Consistent with there being no geometric coupling
 to find.
 
+\section{Robustness: the null background is not uniform}
+\label{sec:nulls}
+
+The detection test builds its null by fitting the same estimator at 75 frequencies spread over
+\SIrange{4}{10}{\hertz}. That pools a band several hertz wide, and the victims' noise is
+\emph{not} flat across it: the amplitude spectrum falls with a log--log slope of $-0.77$ to
+$-1.21$ (median $-0.99$), i.e.\ ordinary $1/f$, and is \SI{2.2}{\times} higher at
+\SIrange{4}{5}{\hertz} than at \SIrange{9}{10}{\hertz}. A null drawn from a sloping background
+mixes levels that do not belong to $f_0$, which could in principle bias both the $p$-value and
+the bound.
+
+\begin{figure}[h]\centering
+\includegraphics{../results/crosstalk7_nulls.png}
+\caption{Left: the background over the null band. Every floating channel follows $1/f$; the one
+terminated channel is white there (slope $+0.21$), which is what a properly biased input should
+look like. Centre: the bound computed from the wide null against a local null hugging $f_0$.
+Right: the driven channel's fitted amplitude against distance from $f_0$ --- a monotonic decay
+that is leakage from its own tone, absent on a channel that carries no tone.}
+\end{figure}
+
+\paragraph{It was checked, and it does not matter.} Re-running the test with a \emph{local}
+null --- $f_0 \pm \SIrange{0.3}{1.0}{\hertz}$, 280 frequencies, a band narrow enough that the
+$1/f$ tilt across it is negligible --- moves every victim's bound by at most
+\SI{0.32}{\deci\bel}, and moves the $p$-values \emph{up} (e.g.\ AF3 $0.440 \to 0.500$,
+P8 $0.453 \to 0.536$). The conclusion is if anything slightly stronger on the local null, and
+does not depend on which band is used.
+
+\paragraph{The one place the choice does matter.} On the \emph{driven} channel the two nulls
+disagree by \SI{4.8}{\deci\bel} (\SI{0.066}{} wide vs \SI{0.116}{\micro\volt} local), and that
+disagreement is real rather than a nuisance: it is spectral leakage from its own
+\SI{24.5}{\micro\volt} tone. The fitted amplitude decays monotonically with distance ---
+\SI{0.281}{}, \SI{0.134}{}, \SI{0.065}{}, \SI{0.039}{}, \SI{0.029}{}, \SI{0.023}{\micro\volt}
+at $|\Delta f| = 0.1$, $0.2$, $0.45$, $0.8$, $1.5$, \SI{2.5}{\hertz} --- while a floating
+channel over the same bins is flat at $\approx$\,\SI{1.1}{\micro\volt}.
+
+The consequence is a rule, not a correction: \textbf{project a terminated victim's noise floor
+from a null far from the tone, never from one sitting beside it.} A terminated victim carries
+no tone of its own, so it has nothing to leak; the right proxy is the driven channel's floor
+away from $f_0$, which is \SIrange{0.023}{0.066}{\micro\volt}. The
+\SI{-51}{\deci\bel} projection in Section~\ref{sec:protocol} uses the conservative end of that
+range and stands.
+
 \section{Replication: a second electrode, and a second sample rate}
 \label{sec:repl}
 

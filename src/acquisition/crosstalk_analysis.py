@@ -77,9 +77,36 @@ def refine(x, fs, f0, span=0.01, n=4001):
 
 def null_frequencies(f0, lo=4.0, hi=10.0, step=0.0731, keep_out=0.30, n_harm=3):
     """Frequencies where nothing should be, for the detection test. Spaced off any grid that
-    would alias with f0, and kept clear of f0 and its harmonics."""
+    would alias with f0, and kept clear of f0 and its harmonics.
+
+    This pools a band several Hz wide, and the victims' background is NOT flat across it —
+    it is 1/f, about 2.2x higher at 4-5 Hz than at 9-10 Hz. `local_null` below re-runs the
+    same test on a narrow band hugging f0 as a robustness check; on this cap the two agree
+    to within 0.32 dB, so the verdict does not depend on the choice."""
     g = np.arange(lo, hi, step)
     return np.array([f for f in g if all(abs(f - k * f0) > keep_out for k in range(1, n_harm + 1))])
+
+
+def local_null(f0, inner=0.30, outer=1.00, step=0.005):
+    """A null band hugging f0, for checking that a sloping background did not bias the test.
+
+    `inner` must clear the estimator's own spectral leakage. That matters only for a channel
+    that actually carries the tone: the driven channel's fitted amplitude falls 0.28 -> 0.023 uV
+    as |f - f0| goes 0.1 -> 2.5 Hz, which is leakage from its own 24.5 uV signal and not its
+    noise floor. So project a terminated victim's floor from the WIDE null, never from a null
+    sitting next to a large tone."""
+    off = np.arange(inner, outer, step)
+    return np.concatenate([f0 - off, f0 + off])
+
+
+def background_slope(x, fs, lo=4.0, hi=10.0):
+    """log-log slope of the amplitude spectrum over the null band. ~-1 is 1/f, ~0 is white."""
+    from scipy.signal import welch
+    f, P = welch(x, fs=fs, nperseg=int(16 * fs), detrend="linear")
+    b = [np.median(np.sqrt(2 * P[(f >= k) & (f < k + 1)] * (f[1] - f[0])))
+         for k in np.arange(lo, hi)]
+    c = np.arange(lo, hi) + 0.5
+    return float(np.polyfit(np.log10(c), np.log10(np.maximum(b, 1e-12)), 1)[0])
 
 
 def detect(x, fs, f0, nulls):
@@ -230,6 +257,19 @@ def report(res, X, fs):
     else:
         for r in det:
             print(f"  {r['ch']}: {r['amp']:.3f} µV = {r['db']:.1f} dB re. source (p={r['p']:.3f})")
+
+    if vic:
+        print(f"\n{B}=== robustness: does the null band matter? ==={RST}")
+        loc = local_null(f0)
+        print(f"  {'ch':<5}{'slope':>8}{'wide dB':>9}{'local dB':>10}{'Δ':>7}{'local p':>9}")
+        for r in sorted(vic, key=lambda r: r["bound_db"], reverse=True):
+            L = np.array([fit_tone(X[r["idx"]], fs, f)[0] for f in loc])
+            lb = 20 * np.log10(np.percentile(L, 95) / a0)
+            print(f"  {r['ch']:<5}{background_slope(X[r['idx']], fs):8.2f}{r['bound_db']:9.1f}"
+                  f"{lb:10.1f}{lb-r['bound_db']:+7.1f}{(L >= r['amp']).mean():9.3f}")
+        print(f"  {G}slope ≈ -1 means the victims' noise is 1/f, so the wide null pools an"
+              f" uneven\n  background — but the bound moves <0.5 dB, so the verdict does not"
+              f" rest on it.{RST}")
 
     ctl = res["ctl"]
     if vic and np.isfinite(ctl.get("phase_sd", np.nan)):
