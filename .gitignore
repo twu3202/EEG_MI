@@ -23,3 +23,6 @@ __pycache__/
 
 # stale archives (the folders themselves are versioned)
 *.zip
+
+# exported dataset bundles (derived from recordings/, meant to be zipped and sent)
+cap32_dataset_*/
