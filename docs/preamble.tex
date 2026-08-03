@@ -1,0 +1,74 @@
+% Shared preamble for the EEG_MI reports.  Use as:
+%
+%     \documentclass[11pt]{ctexart}     % Chinese reports
+%     \documentclass[11pt,a4paper]{article}   % English reports
+%     \input{preamble}
+%
+% Build with:  tectonic <name>.tex        (the only LaTeX engine installed here)
+%
+% WHY THIS FILE EXISTS.  Every report used to carry its own copy of the preamble, and every
+% one of them overran the right margin somewhere — LaTeX reports that as
+% "Overfull \hbox (N pt too wide)" and then prints the offending line past the text block,
+% which is what you see as text touching the paper edge.  There are two distinct causes and
+% they need different fixes:
+%
+%   1. A box that simply cannot be broken — a wide table, a \centerline, a long verbatim
+%      line, a URL.  No amount of justification tuning helps; the content has to be scaled
+%      or made breakable.  Use the \begin{widetable} environment and the \shell environment
+%      below, and let xurl break the URLs.
+%   2. A paragraph where the line breaker could not find an acceptable set of breaks and gave
+%      up.  \emergencystretch gives it extra slack on a final pass, and microtype's character
+%      protrusion buys roughly another half-character per line.  Both are set below and apply
+%      to every paragraph automatically.
+%
+% After editing a report, check it is actually clean:
+%     tectonic --print <name>.tex 2>&1 | grep Overfull
+% Empty output means nothing reaches the margin.
+
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{mdframed}
+\usepackage{fvextra}                % fancyvrb + the breaklines/breakanywhere keys
+\usepackage[export]{adjustbox}      % also gives \includegraphics a max width= key
+\usepackage[colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage{xurl}                   % after hyperref: lets URLs break at any character
+
+% --- cause 2: give the line breaker room instead of letting it overrun -------------------
+\usepackage[verbose=silent]{microtype}   % protrusion; works under xetex, which tectonic uses
+\emergencystretch=3em               % extra slack on the final pass before giving up
+\hbadness=1500                      % ...and stop reporting the loose lines that result
+\vbadness=1500
+
+\sisetup{detect-all, per-mode=symbol, range-units=single}
+% Chinese documents should add \sisetup{range-phrase={\,--\,}} after this file:
+% siunitx's default range phrase is the English word "to".
+\captionsetup{font=small}
+
+% --- cause 1: tools for content that genuinely cannot be broken --------------------------
+% A table that is wider than the text block shrinks to fit instead of hanging off the page.
+% Prefer rewriting the table so it fits; use this when the content really is that wide.
+% \linewidth, not \textwidth: inside quote/itemize the usable width is narrower, and scaling
+% to \textwidth there still lets content hang into the margin.
+\newenvironment{widetable}{\begin{adjustbox}{max width=\linewidth}}{\end{adjustbox}}
+
+% Shell commands: breaks long lines at the margin and marks the continuation, instead of
+% running a single long line straight off the paper the way verbatim does.
+\DefineVerbatimEnvironment{shell}{Verbatim}%
+  {fontsize=\small, breaklines=true, breakanywhere=true,
+   breaksymbolright=\textcolor{gray}{$\hookleftarrow$}, xleftmargin=1em}
+
+% Figures never exceed the text block even if a PNG is wider than expected.
+\setkeys{Gin}{width=\linewidth, keepaspectratio}
+
+% --- shared house style ------------------------------------------------------------------
+\definecolor{good}{HTML}{2E7D46}
+\definecolor{bad}{HTML}{B23B3B}
+\definecolor{warn}{HTML}{9A6A00}
+\newcommand{\uV}{\si{\micro\volt}}
+\newcommand{\cmd}[1]{\texttt{\small #1}}

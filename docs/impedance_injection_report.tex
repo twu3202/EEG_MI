@@ -1,16 +1,5 @@
 \documentclass[11pt]{ctexart}
-\usepackage[margin=2.4cm]{geometry}
-\usepackage{graphicx}
-\usepackage{siunitx}
-\usepackage{booktabs}
-\usepackage{amsmath}
-\usepackage{xcolor}
-\usepackage{caption}
-\usepackage[colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
-\sisetup{detect-all, per-mode=symbol}
-
-\definecolor{good}{HTML}{2E7D46}
-\definecolor{bad}{HTML}{B23B3B}
+\input{preamble}
 
 \title{\bfseries 32\,导 ADS1299 脑电帽:\\阻抗模式与 \SI{31.2}{\hertz} 电流注入的实证验证}
 \author{EEG\_MI 项目}
@@ -95,8 +84,12 @@ I = C\cdot\frac{\mathrm{d}V}{\mathrm{d}t},
 这正是最反直觉、也最能说明问题的一点。\textbf{教科书式的串联阻抗测量} $V=I\cdot Z$ 中,阻抗越高电压越高;那么\emph{电极悬空(阻抗趋于无穷)本应读到最高电压},而实测恰恰\textbf{相反}。这说明本板测的\textbf{不是干净的单电极串联阻抗,而是注入回路能否导通、耦合是否良好}。
 
 \begin{quote}
-恒流源在某电极注入 \SI{31.2}{\hertz} 电流,该电流必须经\\
-\centerline{\textbf{电极 $\to$ 头皮 $\to$ 身体 $\to$ 参考/BIAS 电极 $\to$ 回到板子}}\\
+恒流源在某电极注入 \SI{31.2}{\hertz} 电流,该电流必须经
+
+\begin{center}\begin{widetable}%
+\textbf{电极 $\to$ 头皮 $\to$ 身体 $\to$ 参考/BIAS 电极 $\to$ 回到板子}%
+\end{widetable}\end{center}
+
 形成\textbf{闭合回路},才能在电极上建立起可测的电压。
 \end{quote}
 

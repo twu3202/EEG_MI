@@ -1,16 +1,7 @@
 \documentclass[11pt,a4paper]{article}
-\usepackage[margin=2.2cm]{geometry}
-\usepackage{graphicx,booktabs,amsmath,siunitx,xcolor,caption}
-\usepackage[colorlinks=true,linkcolor=black,urlcolor=blue]{hyperref}
-\usepackage{xurl}
+\input{preamble}
 \usepackage{titlesec}
-\sisetup{detect-all, per-mode=symbol}
 \titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
-\captionsetup{font=small}
-\newcommand{\uV}{\si{\micro\volt}}
-\definecolor{good}{RGB}{46,158,91}
-\definecolor{bad}{RGB}{192,57,43}
-\definecolor{warn}{RGB}{197,138,0}
 
 \title{\textbf{Channel-to-Channel Crosstalk in a 32-Channel Dry-Electrode\\ADS1299 Cap}\\[4pt]
 \large A single-driven-input measurement, and why it sets only an upper bound}
@@ -52,6 +43,11 @@ inputs, not by the amplifier. The one properly terminated input has a noise-only
 ceiling of \SI{0.066}{\micro\volt}, so repeating this exact record with every unused input tied
 to generator ground would bound crosstalk at about \SI{-51}{\deci\bel} --- \SI{27}{\deci\bel}
 better, at no cost but a few jumper wires. Section~\ref{sec:protocol} gives the protocol.
+
+The measurement was repeated with the generator on a second electrode at the opposite end of
+the connector, and again at \SI{1000}{SPS}: same answer all three times, bound within
+\SI{2}{\deci\bel} (Section~\ref{sec:repl}). The higher sample rate made the bound
+\emph{worse}, for reasons given there.
 
 Two estimator faults were found and corrected in the process, both of which had produced
 confidently wrong answers (Section~\ref{sec:traps}). They are documented here because either
@@ -99,6 +95,7 @@ connected to a low-impedance source.
 \begin{table}[h]\centering\small
 \caption{Input state. Only one of 32 inputs was in a condition where a crosstalk measurement
 is meaningful.}
+\begin{widetable}
 \begin{tabular}{llr l}
 \toprule
 State & Criterion & $n$ & Channels \\
@@ -110,6 +107,7 @@ floating & $|\overline{V}| > \SI{1}{\milli\volt}$, not railed & 6 & FP1, AF3, P8
 terminated & $|\overline{V}| \le \SI{1}{\milli\volt}$ & 1 & FZ \\
 \bottomrule
 \end{tabular}
+\end{widetable}
 \end{table}
 
 \begin{figure}[h]\centering
@@ -273,6 +271,69 @@ opposite of what ribbon lead-to-lead capacitance would produce. FP1 at $\Delta\t
 reads more than PO4 at $\Delta\text{pin}=3$. Consistent with there being no geometric coupling
 to find.
 
+\section{Replication: a second electrode, and a second sample rate}
+\label{sec:repl}
+
+One driven channel is one data point. The generator was moved to \textbf{FP1} --- VHDCI pin 2,
+the opposite end of the connector from FZ's pin 31 --- and the measurement repeated, then
+repeated again at \SI{1000}{SPS} instead of \SI{250}{}.
+
+\begin{table}[h]\centering\small
+\caption{Three independent sessions. \textbf{Src} is the driven amplitude, \textbf{drv floor}
+the terminated channel's noise-only 95th percentile, \textbf{vic floor} the worst floating
+channel's. \textbf{Bound} is vic floor in dB re. src --- the smallest leakage the session could
+have revealed. \textbf{min $p$} is the most significant victim in that session.}
+\begin{widetable}
+\begin{tabular}{llrrrrrrrr}
+\toprule
+Session & Driven & Pin & Src \uV & $f_0$ Hz & drv floor & vic floor & Bound & min $p$ & $\max|r|$ \\
+\midrule
+FZ, \SI{250}{SPS}   & FZ  & 31 & 24.542 & 7.0226 & 0.066 & 1.522 & $-24.1$ & 0.200 & 0.002 \\
+FP1, \SI{250}{SPS}  & FP1 & 2  & 24.554 & 7.0231 & 0.080 & 1.542 & $-24.0$ & 0.387 & 0.003 \\
+FP1, \SI{1000}{SPS} & FP1 & 2  & 24.633 & 7.0233 & 0.065 & 1.914 & $-22.2$ & 0.400 & 0.004 \\
+\bottomrule
+\end{tabular}
+\end{widetable}
+\end{table}
+
+\begin{figure}[h]\centering
+\includegraphics{../results/crosstalk7_replication.png}
+\caption{Left: driven amplitude across the three sessions --- \SI{0.37}{\percent} total spread.
+Centre: the detection floor, split into the terminated channel (hatched) and the worst floating
+one. The gap between them, roughly \SI{27}{\deci\bel}, is the entire cost of leaving inputs
+open. Right: the frequency sweep for all three sessions overlaid; solid is the driven channel,
+dotted is that session's worst victim. Every dotted curve passes smoothly through $f_0$.}
+\end{figure}
+
+\paragraph{The result replicates.} No victim is detectable in any session
+($p = 0.20$--$0.45$), the broadband correlation with the driven channel stays below $0.004$
+in all three, and the bound lands within \SI{2}{\deci\bel} of the same place. Driving pin 2
+and pin 31 --- opposite ends of the VHDCI --- gives the same answer, which also partly
+discharges the ``move the driven channel'' item in Section~\ref{sec:protocol}: whatever
+lead-to-lead coupling exists is below the floor at both ends of the connector.
+
+\paragraph{A free calibration result.} The same generator into two different electrodes reads
+\SI{24.542}{} and \SI{24.554}{\micro\volt} --- a \SI{0.05}{\percent} difference, and
+\SI{0.37}{\percent} across all three sessions including the rate change. The datasheet specs
+gain match between channels at \SI{0.2}{\percent} of full scale. Two channels is not a gain
+survey, but as far as it goes, the channels agree with each other and with the part.
+
+\paragraph{\SI{1000}{SPS} is worse, not better.} This was worth testing rather than asserting,
+and the prediction held: the bound got \emph{worse} by \SI{1.8}{\deci\bel}, and the worst
+victim's noise floor rose from \SI{1.542}{} to \SI{1.914}{\micro\volt} (\SI{+24}{\percent}).
+The reason is that the detection floor at \SI{7}{\hertz} is set by the noise \emph{density}
+there and by the total observation time ($\propto 1/\sqrt{T}$) --- neither of which a higher
+sample rate improves. What a higher rate does change is that the ADS1299 averages less per
+sample, so per-sample input-referred noise rises (the terminated channel's \SIrange{20}{45}{\hertz}
+noise went \SI{0.090}{} $\to$ \SI{0.098}{\micro\volt} rms), and the board sends four times the
+UDP traffic.
+
+For this measurement \textbf{stay at \SI{250}{SPS} and record longer instead}: doubling the
+record buys \SI{3}{\deci\bel}, quadrupling it buys \SI{6}{\deci\bel}, and it costs nothing but
+time. A high sample rate would only be the right tool for a different question --- whether
+coupling grows with frequency, which is the signature that separates capacitive from resistive
+paths, and which needs a generator running at hundreds of hertz rather than at 7.
+
 \section{What this does and does not establish}
 
 \paragraph{Established.} Crosstalk from the driven channel into any measurable channel is below
@@ -371,7 +432,7 @@ front end is doing its job.
 \subsection*{Railing on an open input is expected, and is documented as such}
 
 The ADS1299 datasheet's pin table carries the instruction directly, as footnote (2) on every
-\texttt{INxP}/\texttt{INxN} pin: \emph{``Connect unused analog inputs directly to AVDD.''}
+\texttt{INxP}\slash\texttt{INxN}\ pin: \emph{``Connect unused analog inputs directly to AVDD.''}
 Leaving them open is not a supported configuration.
 
 The mechanism is in the same tables. An open input has no DC return, so the
@@ -438,18 +499,20 @@ requirements for the basic safety and essential performance of electroencephalog
 \begin{center}\small
 \begin{tabular}{ll}
 \toprule
-\texttt{recordings/calibrator/cal\_7hz\_180s.npz} & \SI{179}{\second}, the record analysed here \\
-\texttt{recordings/calibrator/cal\_7hz\_xt7hz\_60s.npz} & \SI{59}{\second} \\
-\texttt{recordings/calibrator/cal\_7hz\_probe11s.npz} & \SI{11}{\second} \\
-\texttt{results/crosstalk7.json} & every number in this report \\
+\cmd{recordings/calibrator/cal\_7hz\_180s.npz} & FZ driven, \SI{250}{SPS}, \SI{179}{\second} \\
+\cmd{recordings/calibrator/cal\_7hz\_fp1\_250sps\_180s.npz} & FP1 driven, \SI{250}{SPS} \\
+\cmd{recordings/calibrator/cal\_7hz\_fp1\_1000sps\_180s.npz} & FP1 driven, \SI{1000}{SPS} \\
+\cmd{recordings/calibrator/cal\_7hz\_xt7hz\_60s.npz} & FZ, \SI{59}{\second} \\
+\cmd{recordings/calibrator/cal\_7hz\_probe11s.npz} & FZ, \SI{11}{\second} \\
+\cmd{results/crosstalk7.json}, \cmd{xt\_fp1\_250.json}, \cmd{xt\_fp1\_1000.json} & every number in this report \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\begin{verbatim}
+\begin{shell}
 python src/acquisition/crosstalk_analysis.py \
     recordings/calibrator/cal_7hz_180s.npz --freq 7 --json results/crosstalk7.json
-\end{verbatim}
+\end{shell}
 
 All recordings are raw \si{\micro\volt}, unfiltered, pre-CAR, all 32 channels retained.
 
