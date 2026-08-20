@@ -34,3 +34,6 @@ docs/*.out
 
 # portable copy of src/acquisition for the recording laptop — regenerate, do not track
 cap32_acquisition/
+
+# 内部调研笔记，本地保留，不随仓库分发
+research/
