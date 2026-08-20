@@ -26,3 +26,11 @@ __pycache__/
 
 # exported dataset bundles (derived from recordings/, meant to be zipped and sent)
 cap32_dataset_*/
+
+# LaTeX build noise
+docs/*.log
+docs/*.aux
+docs/*.out
+
+# portable copy of src/acquisition for the recording laptop — regenerate, do not track
+cap32_acquisition/

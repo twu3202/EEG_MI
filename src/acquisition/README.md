@@ -49,7 +49,7 @@ iirnotch + running-mean).
 
 ## Status (verified on the M5)
 - Bridge parse self-test ✅ (`±1000 counts → ±22.35 µV`, sign + trigger correct).
-- Viewer renders ✅ (`results/ui_preview.png`).
+- Viewer renders ✅ (`results/cap_gui_preview.png`).
 - LSL two-process data flow ✅ (producer → consumer, 32 ch @ 250 Hz).
 
 ## Protocol — CONFIRMED from the vendor app (`fromprovider/main_ui`)
